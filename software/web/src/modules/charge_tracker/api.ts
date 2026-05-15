@@ -22,16 +22,6 @@ interface Charge {
     record_index: number;
 }
 
-export interface charge_history_sample {
-    t: number;
-    w: number;
-    ct: number;
-}
-
-export interface charge_history {
-    samples: charge_history_sample[];
-}
-
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
 interface remote_upload_config {
     user_filter: number;

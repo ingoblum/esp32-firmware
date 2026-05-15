@@ -54,6 +54,16 @@ const CHARGE_DYNAMIC_COST_UNAVAILABLE = 0xFFFFFFFF;
 type Charge = API.getType["charge_tracker/last_charges"][0];
 type ChargeTrackerConfig = API.getType["charge_tracker/config"];
 
+interface ChargeHistorySample {
+    t: number;
+    w: number;
+    ct: number;
+}
+
+interface ChargeHistoryResponse {
+    samples?: ChargeHistorySample[];
+}
+
 interface S {
     user_filter: string;
     start_date: Date;
@@ -64,8 +74,8 @@ interface S {
     csv_flavor: "excel" | "rfc4180";
     show_spinner: boolean;
     last_charges: Readonly<Charge[]>;
-    history_modal_charge: Charge;
-    history_modal_samples: API.getType["charge_tracker/charge_history"]["samples"];
+    history_modal_charge: Charge | null;
+    history_modal_samples: ChargeHistorySample[];
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
     new_remote_upload_config: {
         user_filter: number;
@@ -91,10 +101,12 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
 
             let filtered = props.users.filter(x => x.id == props.charge.user_id);
 
-            if (props.charge.user_id != 0 || filtered[0].display_name != "Anonymous") {
-                result = __("charge_tracker.script.deleted_user")
-                if (filtered.length == 1)
-                    result = filtered[0].display_name
+            if (filtered.length == 1) {
+                if (props.charge.user_id != 0 || filtered[0].display_name != "Anonymous")
+                    result = filtered[0].display_name;
+            }
+            else if (props.charge.user_id != 0) {
+                result = __("charge_tracker.script.deleted_user");
             }
             return result;
         },
@@ -146,7 +158,7 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
     </ListGroupItem>
 }
 
-function ChargeHistoryGraph(props: {samples: API.getType["charge_tracker/charge_history"]["samples"]}) {
+function ChargeHistoryGraph(props: {samples: ChargeHistorySample[]}) {
     const samples = props.samples ?? [];
     if (samples.length == 0) {
         return <div class="text-muted">Keine Verlaufsdaten vorhanden.</div>;
@@ -319,7 +331,7 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
                 throw new Error(await response.text());
             }
 
-            const history = await response.json() as API.getType["charge_tracker/charge_history"];
+            const history = await response.json() as ChargeHistoryResponse;
             this.setState({history_modal_samples: history.samples ?? []});
         } catch (e) {
             util.add_alert("charge-history-download", "danger", () => "Ladeverlauf konnte nicht geladen werden", e);
@@ -394,10 +406,12 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
         let result = __("charge_tracker.script.unknown_user");
         let filtered = users.filter(x => x.id == user_id);
 
-        if (user_id != 0 || filtered[0]?.display_name != "Anonymous") {
-            result = __("charge_tracker.script.deleted_user");
-            if (filtered.length == 1)
+        if (filtered.length == 1) {
+            if (user_id != 0 || filtered[0].display_name != "Anonymous")
                 result = filtered[0].display_name;
+        }
+        else if (user_id != 0) {
+            result = __("charge_tracker.script.deleted_user");
         }
         return result;
     }
