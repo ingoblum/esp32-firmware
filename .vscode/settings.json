@@ -1,0 +1,10 @@
+{
+    "platformio-ide.customPATH": "C:\\Data\\INGORALFBLUM\\ingo\\Files\\Basteln\\Warp Wallbox\\Firmware\\Eigene\\esp32-firmware\\software\\.venv\\Scripts",
+    "platformio-ide.useBuiltinPIOCore": false,
+    "platformio-ide.useBuiltinPython": false,
+    "terminal.integrated.env.windows": {
+        "NPM_CONFIG_PREFIX": "C:\\Program Files\\nodejs",
+        "PLATFORMIO_CORE_DIR": "C:\\Data\\INGORA~1\\ingo\\Files\\Basteln\\WARPWA~1\\Firmware\\Eigene\\ESP32-~1\\.platformio-core",
+        "PATH": "C:\\Data\\INGORALFBLUM\\ingo\\Roaming\\Python\\Python314\\Scripts;${env:PATH}"
+    }
+}

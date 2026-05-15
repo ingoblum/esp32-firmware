@@ -10,6 +10,7 @@ provisioning/provision_stage_1_esp32_ethernet_config.json
 provisioning/venv
 provisioning/.venv
 .vscode/
+.platformio-core/
 software/src/modules/valovo*
 software/src/modules/modbus_reader/tinkerforge
 software/valovo_*

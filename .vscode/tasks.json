@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build WARP Firmware",
+            "type": "shell",
+            "command": "uv run pio run -e warp",
+            "options": {
+                "cwd": "C:\\Data\\INGORA~1\\ingo\\Files\\Basteln\\WARPWA~1\\Firmware\\Eigene\\ESP32-~1\\software",
+                "env": {
+                    "NPM_CONFIG_PREFIX": "C:\\Program Files\\nodejs",
+                    "PLATFORMIO_CORE_DIR": "C:\\Data\\INGORA~1\\ingo\\Files\\Basteln\\WARPWA~1\\Firmware\\Eigene\\ESP32-~1\\.platformio-core",
+                    "PATH": "C:\\Data\\INGORALFBLUM\\ingo\\Roaming\\Python\\Python314\\Scripts;${env:PATH}"
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}
