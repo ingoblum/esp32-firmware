@@ -116,6 +116,7 @@ private:
     void resetDynamicHistoryTracking(float kwh_start);
     void writeDynamicHistorySample(uint32_t file_index, uint32_t record_index, const ChargeDynamicHistorySample &sample);
     void writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent);
+    bool findDynamicHistoryRecord(uint32_t timestamp_minutes, uint32_t charge_duration, uint32_t *file_index, uint32_t *record_index);
     int generate_pdf(std::function<int(const void *buffer, size_t len)> &&callback, int user_filter, uint32_t start_timestamp_min, uint32_t end_timestamp_min, uint32_t current_timestamp_min, Language language, const char *letterhead, int letterhead_lines, WebServerRequest *request);
 
     Config last_charges_prototype;

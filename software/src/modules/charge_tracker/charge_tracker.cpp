@@ -148,9 +148,7 @@ void ChargeTracker::pre_setup()
         {"charge_duration", Config::Uint32(0)},
         {"user_id", Config::Uint8(0)},
         {"energy_charged", Config::Float(0)},
-        {"dynamic_cost", Config::Uint32(CHARGE_DYNAMIC_COST_UNAVAILABLE)},
-        {"file_index", Config::Uint32(0)},
-        {"record_index", Config::Uint16(0)}
+        {"dynamic_cost", Config::Uint32(CHARGE_DYNAMIC_COST_UNAVAILABLE)}
     });
 
     last_charges = Config::Array(
@@ -789,10 +787,38 @@ void ChargeTracker::readNRecords(File *f, size_t records_to_read)
         last_charge->get("user_id")->updateUint(cs.user_id);
         last_charge->get("energy_charged")->updateFloat(charged_invalid(cs, ce) ? NAN : ce.meter_end - cs.meter_start);
         last_charge->get("dynamic_cost")->updateUint(getSupplementaryRecordCost(file_index, record_index));
-        last_charge->get("file_index")->updateUint(file_index);
-        last_charge->get("record_index")->updateUint(record_index);
         ++record_index;
     }
+}
+
+bool ChargeTracker::findDynamicHistoryRecord(uint32_t timestamp_minutes, uint32_t charge_duration, uint32_t *file_index, uint32_t *record_index)
+{
+    uint8_t buf[CHARGE_RECORD_SIZE];
+    ChargeStart cs;
+    ChargeEnd ce;
+
+    for (int file = this->first_charge_record; file <= this->last_charge_record; ++file) {
+        File record_file = LittleFS.open(chargeRecordFilename(file));
+        if (!record_file) {
+            continue;
+        }
+
+        uint32_t index = 0;
+        while (record_file.read(buf, CHARGE_RECORD_SIZE) == CHARGE_RECORD_SIZE) {
+            memcpy(&cs, buf, sizeof(cs));
+            memcpy(&ce, buf + sizeof(cs), sizeof(ce));
+
+            if (cs.timestamp_minutes == timestamp_minutes && ce.charge_duration == charge_duration) {
+                *file_index = file;
+                *record_index = index;
+                return true;
+            }
+
+            ++index;
+        }
+    }
+
+    return false;
 }
 
 void ChargeTracker::updateState()
@@ -1147,7 +1173,7 @@ void ChargeTracker::register_urls()
         return request.endChunkedResponse();
     });
 
-    server.on_HTTPThread("/charge_tracker/charge_history", HTTP_GET, [this](WebServerRequest request) {
+    server.on_HTTPThread("/charge_tracker/charge_history*", HTTP_GET, [this](WebServerRequest request) {
         std::lock_guard<std::mutex> lock{records_mutex};
 
         const String uri = request.uri();
@@ -1156,8 +1182,8 @@ void ChargeTracker::register_urls()
             return request.send_plain(400, "Missing query parameters");
         }
 
-        uint32_t file_index = 0;
-        uint32_t record_index = UINT32_MAX;
+        uint32_t timestamp_minutes = 0;
+        uint32_t charge_duration = UINT32_MAX;
         int pos = query_start + 1;
         while (pos < uri.length()) {
             int next = uri.indexOf('&', pos);
@@ -1170,16 +1196,18 @@ void ChargeTracker::register_urls()
             if (eq > 0) {
                 const String key = part.substring(0, eq);
                 const uint32_t value = part.substring(eq + 1).toInt();
-                if (key == "file") {
-                    file_index = value;
-                } else if (key == "record") {
-                    record_index = value;
+                if (key == "timestamp") {
+                    timestamp_minutes = value;
+                } else if (key == "duration") {
+                    charge_duration = value;
                 }
             }
             pos = next + 1;
         }
 
-        if (file_index == 0 || record_index >= CHARGE_RECORD_MAX_FILE_SIZE / CHARGE_RECORD_SIZE) {
+        uint32_t file_index = 0;
+        uint32_t record_index = 0;
+        if (!findDynamicHistoryRecord(timestamp_minutes, charge_duration, &file_index, &record_index)) {
             return request.send_plain(400, "Invalid query parameters");
         }
 

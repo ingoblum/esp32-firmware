@@ -326,7 +326,7 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
         this.setState({history_modal_charge: charge, history_modal_samples: []});
 
         try {
-            const response = await fetch(`/charge_tracker/charge_history?file=${charge.file_index}&record=${charge.record_index}`);
+            const response = await fetch(`/charge_tracker/charge_history?timestamp=${charge.timestamp_minutes}&duration=${charge.charge_duration}`);
             if (!response.ok) {
                 throw new Error(await response.text());
             }
@@ -907,9 +907,7 @@ export class ChargeTrackerStatus extends Component {
                 energy_charged: (energy_abs === null || cc.meter_start === null) ? null : (energy_abs - cc.meter_start),
                 timestamp_minutes: cc.timestamp_minutes,
                 user_id: cc.user_id,
-                dynamic_cost: cc.dynamic_cost,
-                file_index: 0,
-                record_index: 0
+                dynamic_cost: cc.dynamic_cost
             };
 
             current_charge = <FormRow label={__("charge_tracker.status.current_charge")}>
