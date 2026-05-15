@@ -29,7 +29,7 @@ import { FormRow } from "../../ts/components/form_row";
 import { FormSeparator } from "../../ts/components/form_separator";
 import { InputText } from "../../ts/components/input_text";
 import { InputDate } from "../../ts/components/input_date";
-import { Button, Collapse, ListGroup, ListGroupItem, Spinner, Dropdown, Row } from "react-bootstrap";
+import { Button, Collapse, ListGroup, ListGroupItem, Spinner, Dropdown, Row, Modal } from "react-bootstrap";
 import { InputSelect } from "../../ts/components/input_select";
 import { ConfigComponent } from "../../ts/components/config_component";
 import { ConfigForm } from "../../ts/components/config_form";
@@ -64,6 +64,8 @@ interface S {
     csv_flavor: "excel" | "rfc4180";
     show_spinner: boolean;
     last_charges: Readonly<Charge[]>;
+    history_modal_charge: Charge;
+    history_modal_samples: API.getType["charge_tracker/charge_history"]["samples"];
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
     new_remote_upload_config: {
         user_filter: number;
@@ -82,7 +84,7 @@ type ChargeTrackerState = S & API.getType['charge_tracker/state'];
 
 let wallet_icon = <svg width="24" height="24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="6.0999" width="22" height="16" rx="2" ry="2"/><path d="m2.9474 6.0908 15.599-4.8048s0.59352-0.22385 0.57647 0.62527c-0.02215 1.1038-0.01535 3.6833-0.01535 3.6833"/></svg>
 
-function TrackedCharge(props: {charge: Charge, users: API.getType['users/config']['users'], electricity_price: number}) {
+function TrackedCharge(props: {charge: Charge, users: API.getType['users/config']['users'], electricity_price: number, onClick?: () => void}) {
     const display_name = useMemo(
         () => {
             let result = __("charge_tracker.script.unknown_user");
@@ -110,7 +112,7 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
         ? props.charge.dynamic_cost / 100
         : props.electricity_price / 100 * props.charge.energy_charged / 100;
 
-    return <ListGroupItem>
+    return <ListGroupItem action={props.onClick != null} onClick={props.onClick}>
         <div class="row justify-content-end">
             <div class="col-auto pe-2 mb-2">
                 <span class="pe-2"><User/></span>
@@ -144,6 +146,52 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
     </ListGroupItem>
 }
 
+function ChargeHistoryGraph(props: {samples: API.getType["charge_tracker/charge_history"]["samples"]}) {
+    const samples = props.samples ?? [];
+    if (samples.length == 0) {
+        return <div class="text-muted">Keine Verlaufsdaten vorhanden.</div>;
+    }
+
+    const width = 720;
+    const height = 260;
+    const left = 48;
+    const right = 54;
+    const top = 18;
+    const bottom = 34;
+    const plot_w = width - left - right;
+    const plot_h = height - top - bottom;
+
+    const max_t = Math.max(...samples.map(s => s.t), 1);
+    const max_w = Math.max(...samples.map(s => s.w), 1);
+    const valid_prices = samples.filter(s => s.ct != 0x7FFFFFFF).map(s => s.ct / 1000);
+    const min_ct = valid_prices.length == 0 ? 0 : Math.min(...valid_prices);
+    const max_ct = valid_prices.length == 0 ? 1 : Math.max(...valid_prices, min_ct + 1);
+
+    const x = (t: number) => left + (t / max_t) * plot_w;
+    const y_power = (w: number) => top + plot_h - (w / max_w) * plot_h;
+    const y_price = (ct: number) => top + plot_h - ((ct - min_ct) / (max_ct - min_ct)) * plot_h;
+    const power_points = samples.map(s => `${x(s.t)},${y_power(s.w)}`).join(" ");
+    const price_points = samples.filter(s => s.ct != 0x7FFFFFFF).map(s => `${x(s.t)},${y_price(s.ct / 1000)}`).join(" ");
+
+    return <svg viewBox={`0 0 ${width} ${height}`} style="width: 100%; height: auto;">
+        <line x1={left} y1={top} x2={left} y2={top + plot_h} stroke="currentColor" opacity="0.35" />
+        <line x1={left} y1={top + plot_h} x2={left + plot_w} y2={top + plot_h} stroke="currentColor" opacity="0.35" />
+        <line x1={left + plot_w} y1={top} x2={left + plot_w} y2={top + plot_h} stroke="currentColor" opacity="0.2" />
+        <polyline points={power_points} fill="none" stroke="#0d6efd" stroke-width="2.5" />
+        <polyline points={price_points} fill="none" stroke="#dc3545" stroke-width="2.5" />
+        <text x={left} y={height - 8} font-size="12" fill="currentColor">0 min</text>
+        <text x={left + plot_w} y={height - 8} font-size="12" text-anchor="end" fill="currentColor">{max_t} min</text>
+        <text x={8} y={top + 8} font-size="12" fill="#0d6efd">{util.toLocaleFixed(max_w / 1000, 1)} kW</text>
+        <text x={width - 6} y={top + 8} font-size="12" text-anchor="end" fill="#dc3545">{util.toLocaleFixed(max_ct, 2)} ct/kWh</text>
+        <text x={8} y={top + plot_h} font-size="12" fill="#0d6efd">0 kW</text>
+        <text x={width - 6} y={top + plot_h} font-size="12" text-anchor="end" fill="#dc3545">{util.toLocaleFixed(min_ct, 2)} ct/kWh</text>
+        <circle cx={left + 12} cy={top + plot_h + 22} r="4" fill="#0d6efd" />
+        <text x={left + 22} y={top + plot_h + 26} font-size="12" fill="currentColor">kW</text>
+        <circle cx={left + 66} cy={top + plot_h + 22} r="4" fill="#dc3545" />
+        <text x={left + 76} y={top + plot_h + 26} font-size="12" fill="currentColor">ct/kWh</text>
+    </svg>;
+}
+
 
 function date_to_minutes(d: Date, round_mode: 'start_of_day' | 'end_of_day') {
     let date = d ?? new Date(0);
@@ -172,6 +220,8 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
                   csv_flavor: 'excel',
                   start_date: new Date(NaN),
                   end_date: new Date(NaN),
+                  history_modal_charge: null,
+                  history_modal_samples: [],
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
                   remote_upload_configs: [],
                   new_remote_upload_config: {
@@ -256,8 +306,24 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
     get_last_charges(charges: Readonly<Charge[]>, price: number) {
         let users_config = API.get('users/config');
 
-        return charges.map(c => <TrackedCharge charge={c} users={users_config.users} electricity_price={price}/>)
+        return charges.map(c => <TrackedCharge charge={c} users={users_config.users} electricity_price={price} onClick={() => this.showChargeHistory(c)}/>)
                       .reverse();
+    }
+
+    async showChargeHistory(charge: Charge) {
+        this.setState({history_modal_charge: charge, history_modal_samples: []});
+
+        try {
+            const response = await fetch(`/charge_tracker/charge_history?file=${charge.file_index}&record=${charge.record_index}`);
+            if (!response.ok) {
+                throw new Error(await response.text());
+            }
+
+            const history = await response.json() as API.getType["charge_tracker/charge_history"];
+            this.setState({history_modal_samples: history.samples ?? []});
+        } catch (e) {
+            util.add_alert("charge-history-download", "danger", () => "Ladeverlauf konnte nicht geladen werden", e);
+        }
     }
 
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
@@ -619,6 +685,15 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
 
         return (
             <SubPage name="charge_tracker">
+                <Modal size="lg" centered show={state.history_modal_charge != null} onHide={() => this.setState({history_modal_charge: null})}>
+                    <Modal.Header closeButton>
+                        <Modal.Title>Ladeverlauf</Modal.Title>
+                    </Modal.Header>
+                    <Modal.Body>
+                        <ChargeHistoryGraph samples={state.history_modal_samples}/>
+                    </Modal.Body>
+                </Modal>
+
                 <ConfigForm id="charge_tracker_config_form" title={__("charge_tracker.content.charge_tracker" )} isDirty={this.isDirty()} onSave={this.save} onDirtyChange={this.setDirty}>
                     <FormRow label={__("charge_tracker.content.price")} warning={__("charge_tracker.content.price_not_dynamic_yet")(dap_enabled)} show_warning>
                         <InputFloat class={state.electricity_price == 0 || state.electricity_price >= 100 ? "" : "is-invalid"} value={state.electricity_price} onValue={this.set('electricity_price')} digits={2} unit="ct/kWh" max={65535} min={0}/>
@@ -818,7 +893,9 @@ export class ChargeTrackerStatus extends Component {
                 energy_charged: (energy_abs === null || cc.meter_start === null) ? null : (energy_abs - cc.meter_start),
                 timestamp_minutes: cc.timestamp_minutes,
                 user_id: cc.user_id,
-                dynamic_cost: cc.dynamic_cost
+                dynamic_cost: cc.dynamic_cost,
+                file_index: 0,
+                record_index: 0
             };
 
             current_charge = <FormRow label={__("charge_tracker.status.current_charge")}>

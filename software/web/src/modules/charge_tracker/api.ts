@@ -16,6 +16,20 @@ interface Charge {
     // record has no dynamic price data and the frontend should use the
     // configured fixed price fallback instead.
     dynamic_cost: number;
+    // File and record indices identify the LittleFS supplementary history files that contain
+    // the optional 5-minute power/price history for this charge.
+    file_index: number;
+    record_index: number;
+}
+
+export interface charge_history_sample {
+    t: number;
+    w: number;
+    ct: number;
+}
+
+export interface charge_history {
+    samples: charge_history_sample[];
 }
 
 //#if MODULE_REMOTE_ACCESS_AVAILABLE

@@ -258,7 +258,7 @@ String CSVChargeLogGenerator::convertToWindows1252(const String& utf8_string) {
 }
 
 bool CSVChargeLogGenerator::readChargeRecords(uint32_t first_record, uint32_t last_record,
-                                              std::function<esp_err_t(const uint8_t* record_data, size_t record_size, uint32_t file_idx, uint32_t charge_idx, bool last)> record_callback) {
+                                              std::function<esp_err_t(const uint8_t* record_data, size_t record_size, uint32_t file_idx, uint32_t record_idx, bool last)> record_callback) {
 
     uint8_t buffer[sizeof(Charge)];
     for (uint32_t file_idx = first_record; file_idx <= last_record; file_idx++) {
@@ -339,7 +339,7 @@ int CSVChargeLogGenerator::generateCSV(const CSVGenerationParams& params,
     accumulated_data.reserve(MAX_ACCUMULATED);
 
     int rc = readChargeRecords(charge_tracker.first_charge_record, charge_tracker.last_charge_record,
-        [&](const uint8_t* record_data, size_t record_size, uint32_t file_idx, uint32_t charge_idx, bool last) -> esp_err_t {
+        [&](const uint8_t* record_data, size_t record_size, uint32_t file_idx, uint32_t record_idx, bool last) -> esp_err_t {
             const Charge* record = reinterpret_cast<const Charge*>(record_data);
 
             if (!ChargeTracker::include_charge(record->cs, params.user_filter, params.start_timestamp_min, params.end_timestamp_min, params.configured_users))
@@ -351,7 +351,7 @@ int CSVChargeLogGenerator::generateCSV(const CSVGenerationParams& params,
                 energy_charged = record->ce.meter_end - record->cs.meter_start;
             }
 
-            const uint32_t dynamic_cost_cent = charge_tracker.getDynamicCost(file_idx, charge_idx);
+            const uint32_t dynamic_cost_cent = charge_tracker.getSupplementaryRecordCost(file_idx, record_idx);
             float price_euros = NAN;
             if (dynamic_cost_cent != CHARGE_DYNAMIC_COST_UNAVAILABLE) {
                 price_euros = dynamic_cost_cent / 100.0f;

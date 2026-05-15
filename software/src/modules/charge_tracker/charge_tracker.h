@@ -45,6 +45,15 @@ public:
     void setup() override;
     void register_urls() override;
 
+    // Die Ladungen werden fortlaufend in Dateien gespeichert in denen sequentiell die Charge-Strukturen,
+    // im Quelltext auch charge record genannt, gespeichert werden. Jede dieser Dateien kann maximal
+    // 4096 Bytes groß sein. Danach wird mit der nächsten Ladung die Datei mit dem Folgeindex begonnen.
+    // Um Speicher zu sparen gibt es nur eine begrenzte Anzahl Dateien und ältere Dateien werden wieder
+    // gelöscht.
+    //
+    // Der Name dieser Bezeichner ist nicht ganz konsistent, denn sie bezeichnet nicht den Record selber,
+    // sondern nur die Datei, in der sich der Record befindet. Ein besserer Name wäre wohl
+    // first_charge_record_fileindex und last_charge_record_fileindex
     uint32_t first_charge_record;
     uint32_t last_charge_record;
 
@@ -53,13 +62,15 @@ public:
     void removeOldRecords();
     bool setupRecords();
     void updateState();
+
+    // Prüft, ob dem Benutzer ein Ladevorgang in der History zugeordnet wurde.
     bool is_user_tracked(uint8_t user_id);
 
     // Returns the stored dynamic cost in cents for a completed charge or
-    // CHARGE_DYNAMIC_COST_UNAVAILABLE if the sidecar entry is missing. CSV/PDF
+    // CHARGE_DYNAMIC_COST_UNAVAILABLE if the supplementary record entry is missing. CSV/PDF
     // generation uses this to prefer dynamic prices while keeping a fixed-price
     // fallback for old records.
-    uint32_t getDynamicCost(uint32_t file_index, uint32_t charge_index);
+    uint32_t getSupplementaryRecordCost(uint32_t file_index, uint32_t record_index);
 
     size_t completeRecordsInLastFile();
     bool currentlyCharging();
@@ -97,11 +108,14 @@ private:
     // Dynamic-price accounting is kept in memory while a charge is active. Each
     // sample multiplies the newly charged kWh since the previous sample with
     // the price that was valid for that interval. At charge end only the final
-    // rounded cent value is persisted in the sidecar file.
-    void startDynamicCostTracking(float meter_start);
-    void sampleDynamicCost(float meter_abs = NAN);
-    uint32_t finishDynamicCostTracking(float meter_end);
-    void writeDynamicCost(uint32_t file_index, uint32_t charge_index, uint32_t cost_cent);
+    // rounded cent value is persisted in the supplementary record file.
+    void startDynamicCostTracking(float kwh_start);
+    void sampleDynamicCost(float kwh_abs = NAN);
+    uint32_t finishDynamicCostTracking(float kwh_end);
+    void sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh_milli, bool force);
+    void resetDynamicHistoryTracking(float kwh_start);
+    void writeDynamicHistorySample(uint32_t file_index, uint32_t record_index, const ChargeDynamicHistorySample &sample);
+    void writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent);
     int generate_pdf(std::function<int(const void *buffer, size_t len)> &&callback, int user_filter, uint32_t start_timestamp_min, uint32_t end_timestamp_min, uint32_t current_timestamp_min, Language language, const char *letterhead, int letterhead_lines, WebServerRequest *request);
 
     Config last_charges_prototype;
@@ -109,9 +123,14 @@ private:
 
     uint64_t dynamic_cost_task_id = 0;
     bool dynamic_cost_tracking = false;
-    float dynamic_cost_last_meter = NAN;
+    float dynamic_cost_last_kwh = NAN;
     int32_t dynamic_cost_last_price = INT32_MAX;
     double dynamic_cost_cent = 0.0;
+    uint32_t dynamic_history_file_index = 0;
+    uint32_t dynamic_history_record_index = 0;
+    uint32_t dynamic_history_start_ms = 0;
+    uint32_t dynamic_history_last_ms = 0;
+    float dynamic_history_last_kwh = NAN;
 };
 
 /**

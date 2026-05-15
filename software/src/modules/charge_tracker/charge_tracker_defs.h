@@ -30,10 +30,16 @@
 // own file "charge-record-%lu.bin"
 #define CHARGE_RECORD_FOLDER "/charge-records"
 
-// Dynamic costs are stored in a separate sidecar file per charge-record file.
+// Dynamic history samples are recorded at most every five minutes. Shorter
+// final intervals are still persisted at charge end so the graph covers the
+// whole charge.
+#define CHARGE_DYNAMIC_HISTORY_INTERVAL_MS (5UL * 60UL * 1000UL)
+
+// Dynamic costs are stored in a separate supplementary record file per charge-record file.
 // This sentinel marks charges for which no dynamic-price calculation exists,
 // for example old records that were written before this feature was available.
 #define CHARGE_DYNAMIC_COST_UNAVAILABLE UINT32_MAX
+#define CHARGE_DYNAMIC_HISTORY_PRICE_UNAVAILABLE INT32_MAX
 
 struct [[gnu::packed]] ChargeStart {
     uint32_t timestamp_minutes = 0;
@@ -59,13 +65,24 @@ struct [[gnu::packed]] Charge {
 // left at 16 bytes per charge so existing logs stay readable and all repair and
 // rotation logic can continue to operate on the original record size.
 //
-// For each charge this information is stored in a file named "charge-record-%lu-cost.bin"
-// in the same folder as the charge record.
-struct [[gnu::packed]] ChargeDynamicCost {
+// For each charge record file this information is stored in a supplementary
+// record file named "charge-record-%lu-supplementary.bin" in the same folder.
+struct [[gnu::packed]] ChargeSupplementaryRecord {
     uint32_t cost_cent = CHARGE_DYNAMIC_COST_UNAVAILABLE;
 };
 
-static_assert(sizeof(ChargeDynamicCost) == 4, "Unexpected size of ChargeDynamicCost");
+static_assert(sizeof(ChargeSupplementaryRecord) == 4, "Unexpected size of ChargeSupplementaryRecord");
+
+// One sample describes the interval ending at offset_minutes after charge
+// start. power_w is the average charged power over that interval. price is
+// stored in the same unit as DayAheadPrices: ct/1000 per kWh.
+struct [[gnu::packed]] ChargeDynamicHistorySample {
+    uint16_t offset_minutes = 0;
+    uint16_t power_w = 0;
+    int32_t price_ct_per_kwh_milli = CHARGE_DYNAMIC_HISTORY_PRICE_UNAVAILABLE;
+};
+
+static_assert(sizeof(ChargeDynamicHistorySample) == 8, "Unexpected size of ChargeDynamicHistorySample");
 
 struct display_name_entry {
     uint32_t length;
@@ -74,4 +91,5 @@ struct display_name_entry {
 
 size_t get_display_name(uint8_t user_id, char *ret_buf, display_name_entry *display_name_cache, Language language);
 String chargeRecordFilename(uint32_t i);
-String chargeDynamicCostFilename(uint32_t i);
+String chargeSupplementaryRecordFilename(uint32_t i);
+String chargeDynamicHistoryFilename(uint32_t file_index, uint32_t record_index);
