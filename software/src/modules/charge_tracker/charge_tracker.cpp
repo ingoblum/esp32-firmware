@@ -37,6 +37,7 @@
 #include "generated/csv_flavor.enum.h"
 #include "generated/generation_state.enum.h"
 #include "charge_tracker_defs.h"
+#include "../users/users.h"
 
 #define PDF_LETTERHEAD_MAX_SIZE 512
 
@@ -94,6 +95,17 @@ String chargeRecordFilename(uint32_t i)
     return String(buf, sw.getLength());
 }
 
+String chargeDynamicCostFilename(uint32_t i)
+{
+    // One cost sidecar exists per charge-record blob. The nth 4-byte entry in
+    // this file belongs to the nth completed 16-byte charge in the matching
+    // charge-record file.
+    char buf[72];
+    StringWriter sw(buf, sizeof(buf));
+    sw.printf(CHARGE_RECORD_FOLDER "/charge-record-%lu-cost.bin", i);
+    return String(buf, sw.getLength());
+}
+
 #if MODULE_REMOTE_ACCESS_AVAILABLE()
 static bool wants_send(uint32_t current_time_min, uint32_t last_send_time_min)
 {
@@ -124,7 +136,8 @@ void ChargeTracker::pre_setup()
         {"timestamp_minutes", Config::Uint32(0)},
         {"charge_duration", Config::Uint32(0)},
         {"user_id", Config::Uint8(0)},
-        {"energy_charged", Config::Float(0)}
+        {"energy_charged", Config::Float(0)},
+        {"dynamic_cost", Config::Uint32(CHARGE_DYNAMIC_COST_UNAVAILABLE)}
     });
 
     last_charges = Config::Array(
@@ -139,6 +152,7 @@ void ChargeTracker::pre_setup()
         {"evse_uptime_start", Config::Uint32(0)},
         {"timestamp_minutes", Config::Uint32(0)},
         {"authorization_type", Config::Uint8(0)},
+        {"dynamic_cost", Config::Uint32(CHARGE_DYNAMIC_COST_UNAVAILABLE)},
         {"authorization_info", Config{Config::ConfVariant()}}
     });
 
@@ -275,8 +289,13 @@ bool ChargeTracker::startCharge(uint32_t timestamp_minutes, float meter_start, u
     current_charge.get("evse_uptime_start")->updateUint(evse_uptime);
     current_charge.get("timestamp_minutes")->updateUint(timestamp_minutes);
     current_charge.get("authorization_type")->updateUint(auth_type);
+    current_charge.get("dynamic_cost")->updateUint(CHARGE_DYNAMIC_COST_UNAVAILABLE);
     current_charge.get("authorization_info")->value = auth_info;
     current_charge.get("authorization_info")->value.updated = 0xFF;
+    // Start cost accounting only after the normal charge start was persisted.
+    // If the regular charge tracking rejects the start, no dynamic side data is
+    // created either.
+    startDynamicCostTracking(meter_start);
     return true;
 }
 
@@ -284,6 +303,10 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
 {
     std::lock_guard<std::mutex> lock{records_mutex};
     ChargeEnd ce;
+    // Finalize before clearing current_charge. The last meter reading supplied
+    // by Users is the authoritative end value for both the regular charge log
+    // and the dynamic price integration.
+    uint32_t dynamic_cost = finishDynamicCostTracking(meter_end);
 
     {
         File file = LittleFS.open(chargeRecordFilename(this->last_charge_record), "a");
@@ -303,6 +326,10 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
 
         file.write(buf, sizeof(ce));
     }
+    // The charge record is complete now, so the sidecar can be written at the
+    // same zero-based charge index. Missing or unavailable dynamic prices are
+    // persisted as CHARGE_DYNAMIC_COST_UNAVAILABLE to keep indexing stable.
+    writeDynamicCost(this->last_charge_record, completeRecordsInLastFile() - 1, dynamic_cost);
     logger.printfln("Tracked end of charge.");
 
     // We've just written the charge record in the file. It is always safe to read it back again.
@@ -318,6 +345,7 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
     current_charge.get("evse_uptime_start")->updateUint(0);
     current_charge.get("timestamp_minutes")->updateUint(0);
     current_charge.get("authorization_type")->updateUint(0);
+    current_charge.get("dynamic_cost")->updateUint(CHARGE_DYNAMIC_COST_UNAVAILABLE);
     current_charge.get("authorization_info")->value = Config::ConfVariant{};
 
     updateState();
@@ -367,6 +395,7 @@ void ChargeTracker::removeOldRecords()
             }
         }
         LittleFS.remove(name);
+        LittleFS.remove(chargeDynamicCostFilename(this->first_charge_record));
         ++this->first_charge_record;
     }
 
@@ -422,6 +451,13 @@ bool ChargeTracker::setupRecords()
         }
 
         if (name == "use_imexsum") {
+            continue;
+        }
+
+        if (name.endsWith("-cost.bin")) {
+            // Cost sidecars are discovered through their matching charge-record
+            // file. Treating them as normal charge records would break the
+            // existing consecutive-record validation.
             continue;
         }
 
@@ -497,9 +533,142 @@ bool ChargeTracker::currentlyCharging()
     return (fsize % CHARGE_RECORD_SIZE) == sizeof(ChargeStart);
 }
 
+void ChargeTracker::startDynamicCostTracking(float meter_start)
+{
+#if MODULE_DAY_AHEAD_PRICES_AVAILABLE()
+    // Prices are in ct/1000 per kWh. We keep the last known price separately
+    // from the current Day Ahead state so that energy between two samples is
+    // always charged with the price that was valid during that interval.
+    dynamic_cost_tracking = true;
+    dynamic_cost_last_meter = meter_start;
+    dynamic_cost_cent = 0.0;
+    dynamic_cost_last_price = INT32_MAX;
+
+    int32_t current_price = INT32_MAX;
+    if (day_ahead_prices.get_current_price().try_unwrap(&current_price)) {
+        dynamic_cost_last_price = current_price;
+    }
+#else
+    (void)meter_start;
+#endif
+}
+
+void ChargeTracker::sampleDynamicCost(float meter_abs)
+{
+#if MODULE_DAY_AHEAD_PRICES_AVAILABLE()
+    if (!dynamic_cost_tracking || !currentlyCharging()) {
+        return;
+    }
+
+    if (std::isnan(meter_abs)) {
+        // Periodic samples obtain their own meter reading. Charge-end samples
+        // pass the already-read end value to avoid reading a slightly different
+        // value for cost and energy logging.
+        meter_abs = get_energy();
+    }
+
+    int32_t current_price = INT32_MAX;
+    const bool have_current_price = day_ahead_prices.get_current_price().try_unwrap(&current_price);
+
+    if (!std::isnan(dynamic_cost_last_meter) && !std::isnan(meter_abs) && meter_abs >= dynamic_cost_last_meter && dynamic_cost_last_price != INT32_MAX) {
+        // Integrate by absolute energy delta instead of instantaneous power.
+        // This follows the meter exactly and avoids accumulating sampling-rate
+        // error if the charging power changes between two samples.
+        const double delta_kwh = meter_abs - dynamic_cost_last_meter;
+        dynamic_cost_cent += delta_kwh * dynamic_cost_last_price / 1000.0;
+        current_charge.get("dynamic_cost")->updateUint(static_cast<uint32_t>(std::round(dynamic_cost_cent)));
+    }
+
+    if (!std::isnan(meter_abs)) {
+        dynamic_cost_last_meter = meter_abs;
+    }
+
+    // Switch to the freshly observed price only after accounting the previous
+    // interval. This is especially relevant around 15-minute price boundaries.
+    dynamic_cost_last_price = have_current_price ? current_price : INT32_MAX;
+#else
+    (void)meter_abs;
+#endif
+}
+
+uint32_t ChargeTracker::finishDynamicCostTracking(float meter_end)
+{
+#if MODULE_DAY_AHEAD_PRICES_AVAILABLE()
+    if (!dynamic_cost_tracking) {
+        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    }
+
+    // Force one final integration step with the exact meter end value before
+    // the charge is closed and current_charge is reset.
+    sampleDynamicCost(meter_end);
+    dynamic_cost_tracking = false;
+    dynamic_cost_last_meter = NAN;
+    dynamic_cost_last_price = INT32_MAX;
+
+    if (dynamic_cost_cent < 0.0) {
+        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    }
+
+    return static_cast<uint32_t>(std::round(dynamic_cost_cent));
+#else
+    (void)meter_end;
+    return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+#endif
+}
+
 bool charged_invalid(ChargeStart cs, ChargeEnd ce)
 {
     return isnan(cs.meter_start) || isnan(ce.meter_end) || ce.meter_end < cs.meter_start;
+}
+
+uint32_t ChargeTracker::getDynamicCost(uint32_t file_index, uint32_t charge_index)
+{
+    // Absence of the sidecar or a short sidecar is expected for old logs and
+    // for records that were written while Day Ahead Prices were disabled.
+    File cost_file = LittleFS.open(chargeDynamicCostFilename(file_index));
+    if (!cost_file) {
+        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    }
+
+    const size_t offset = charge_index * sizeof(ChargeDynamicCost);
+    if (cost_file.size() < offset + sizeof(ChargeDynamicCost)) {
+        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    }
+
+    ChargeDynamicCost cost;
+    cost_file.seek(offset);
+    if (cost_file.read(reinterpret_cast<uint8_t *>(&cost), sizeof(cost)) != sizeof(cost)) {
+        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    }
+
+    return cost.cost_cent;
+}
+
+void ChargeTracker::writeDynamicCost(uint32_t file_index, uint32_t charge_index, uint32_t cost_cent)
+{
+    File cost_file = LittleFS.open(chargeDynamicCostFilename(file_index), "r+");
+    if (!cost_file) {
+        cost_file = LittleFS.open(chargeDynamicCostFilename(file_index), "w", true);
+    }
+
+    if (!cost_file) {
+        logger.printfln("Failed to open dynamic charge cost file.");
+        return;
+    }
+
+    // Pad skipped entries explicitly. This keeps random access by charge index
+    // valid even if a previous write failed or an older firmware produced
+    // charge records without dynamic-cost side data.
+    ChargeDynamicCost unavailable;
+    while (cost_file.size() < charge_index * sizeof(ChargeDynamicCost)) {
+        cost_file.seek(0, SeekMode::SeekEnd);
+        cost_file.write(reinterpret_cast<const uint8_t *>(&unavailable), sizeof(unavailable));
+    }
+
+    ChargeDynamicCost cost;
+    cost.cost_cent = cost_cent;
+    cost_file.seek(charge_index * sizeof(ChargeDynamicCost));
+    cost_file.write(reinterpret_cast<const uint8_t *>(&cost), sizeof(cost));
 }
 
 void ChargeTracker::readNRecords(File *f, size_t records_to_read)
@@ -507,6 +676,12 @@ void ChargeTracker::readNRecords(File *f, size_t records_to_read)
     uint8_t buf[CHARGE_RECORD_SIZE];
     ChargeStart cs;
     ChargeEnd ce;
+    // The read cursor already points at the first record to be imported into
+    // last_charges, so position()/record-size gives the matching sidecar index.
+    String name{f->name()};
+    const int prefix = name.lastIndexOf("charge-record-");
+    uint32_t file_index = name.substring(prefix + 14, name.length() - 4).toInt();
+    size_t charge_index = f->position() / CHARGE_RECORD_SIZE;
 
     for (int i = 0; i < records_to_read; ++i) {
         memset(buf, 0, sizeof(buf));
@@ -520,6 +695,8 @@ void ChargeTracker::readNRecords(File *f, size_t records_to_read)
         last_charge->get("charge_duration")->updateUint(ce.charge_duration);
         last_charge->get("user_id")->updateUint(cs.user_id);
         last_charge->get("energy_charged")->updateFloat(charged_invalid(cs, ce) ? NAN : ce.meter_end - cs.meter_start);
+        last_charge->get("dynamic_cost")->updateUint(getDynamicCost(file_index, charge_index));
+        ++charge_index;
     }
 }
 
@@ -580,6 +757,16 @@ void ChargeTracker::setup()
     }
 
     updateState();
+
+#if MODULE_DAY_AHEAD_PRICES_AVAILABLE()
+    // The task is intentionally lightweight: it samples the absolute meter and
+    // current price periodically while a charge is active. A 30s cadence keeps
+    // price-boundary error very small without adding flash writes during the
+    // charge; only the final cent value is persisted.
+    dynamic_cost_task_id = task_scheduler.scheduleWithFixedDelay([this]() {
+        this->sampleDynamicCost();
+    }, 30_s, 30_s);
+#endif
 }
 
 bool user_configured(const uint8_t configured_users[MAX_ACTIVE_USERS], uint8_t user_id)
@@ -650,7 +837,7 @@ size_t get_display_name(uint8_t user_id, char *ret_buf, display_name_entry *disp
     return display_name_cache[user_id].length;
 }
 
-static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, Language language, uint32_t electricity_price, display_name_entry *display_name_cache)
+static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, Language language, uint32_t electricity_price, uint32_t dynamic_cost, display_name_entry *display_name_cache)
 {
     buf += 1 + timestamp_min_to_date_time_string(buf, cs.timestamp_minutes, language);
 
@@ -699,7 +886,14 @@ static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, L
         buf += 1 + written;
     }
 
-    if (electricity_price == 0) {
+    if (dynamic_cost != CHARGE_DYNAMIC_COST_UNAVAILABLE) {
+        if (dynamic_cost > 999999) {
+            memcpy(buf, ">=10000", ARRAY_SIZE(">=10000"));
+            buf += ARRAY_SIZE(">=10000");
+        } else {
+            buf += 1 + sprintf_u(buf, "%ld%c%02ld", dynamic_cost / 100, (language == Language::English) ? '.' : ',', dynamic_cost % 100);
+        }
+    } else if (electricity_price == 0) {
         memcpy(buf, "---", ARRAY_SIZE("---"));
         buf += ARRAY_SIZE("---");
     } else if (charged_invalid(cs, ce)) {
@@ -1034,6 +1228,7 @@ void ChargeTracker::register_urls()
         csv_params.end_timestamp_min = end_timestamp_min;
         csv_params.language = language;
         csv_params.flavor = (CSVFlavor)csv_delimiter;
+        csv_params.dynamic_prices = MODULE_DAY_AHEAD_PRICES_AVAILABLE();
         task_scheduler.await([this, &csv_params]() {
             csv_params.electricity_price = this->config.get("electricity_price")->asUint();
 
@@ -1458,6 +1653,7 @@ void ChargeTracker::send_file(std::unique_ptr<RemoteUploadRequest> upload_args) 
         csv_params.end_timestamp_min = upload_args->end_timestamp_min;
         csv_params.language = upload_args->language;
         csv_params.flavor = upload_args->csv_delimiter;
+        csv_params.dynamic_prices = MODULE_DAY_AHEAD_PRICES_AVAILABLE();
         task_scheduler.await([this, &csv_params]() {
             csv_params.electricity_price = this->config.get("electricity_price")->asUint();
 
@@ -1673,6 +1869,7 @@ int ChargeTracker::generate_pdf(
     char stats_buf[384];
     double charged_sum = 0;
     uint32_t charged_cost_sum = 0;
+    bool seen_charge_cost = false;
     bool seen_charges_without_meter = false;
     int charge_records = 0;
     int first_file = -1;
@@ -1729,8 +1926,14 @@ int ChargeTracker::generate_pdf(
                 else {
                     double charged = ce.meter_end - cs.meter_start;
                     charged_sum += charged;
-                    if (electricity_price != 0)
+                    const uint32_t dynamic_cost = getDynamicCost(i, j);
+                    if (dynamic_cost != CHARGE_DYNAMIC_COST_UNAVAILABLE) {
+                        charged_cost_sum += dynamic_cost;
+                        seen_charge_cost = true;
+                    } else if (electricity_price != 0) {
                         charged_cost_sum += round(charged * electricity_price / 100.0f);
+                        seen_charge_cost = true;
+                    }
                 }
             }
         }
@@ -1784,7 +1987,10 @@ search_done:
         memcpy(stats_head, ">=1000000000 kWh", ARRAY_SIZE(">=1000000000 kWh"));
         stats_head += ARRAY_SIZE(">=1000000000 kWh");
     }
-    if (electricity_price != 0) {
+    if (seen_charge_cost) {
+        // The sum mixes dynamic sidecar costs where available with the fixed
+        // configured price as a fallback for older records. If no row has any
+        // usable price, omit the summary line instead of showing a misleading 0.
         int written = sprintf_u(stats_head, "%s: %ld.%02ld€ (%.2f ct/kWh)%s",
                         (language == Language::English) ? "Total cost" : "Gesamtkosten",
                         charged_cost_sum / 100, charged_cost_sum % 100,
@@ -1827,7 +2033,7 @@ search_done:
         charge_records = 1;
     int rc = init_pdf_generator(callback,
                        (language == Language::English) ? "WARP Charge Log" : "WARP Ladelog",
-                       stats_buf, (electricity_price == 0) ? 5 : 6,
+                       stats_buf, seen_charge_cost ? 6 : 5,
                        letterhead, letterhead_lines,
                        (language == Language::English) ? table_header_en : table_header_de,
                        charge_records,
@@ -1874,7 +2080,7 @@ search_done:
                 if (!ChargeTracker::include_charge(cs, user_filter, start_timestamp_min, end_timestamp_min, configured_users))
                     continue;
 
-                table_lines_head = tracked_charge_to_string(table_lines_head, cs, ce, language, electricity_price, display_name_cache);
+                table_lines_head = tracked_charge_to_string(table_lines_head, cs, ce, language, electricity_price, getDynamicCost(current_file, current_charge), display_name_cache);
                 ++lines_generated;
             }
             if (current_charge >= (CHARGE_RECORD_MAX_FILE_SIZE / CHARGE_RECORD_SIZE)) {

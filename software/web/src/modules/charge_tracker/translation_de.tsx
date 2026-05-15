@@ -42,10 +42,10 @@ let x = {
             "price": "Strompreis",
             "price_invalid": "Der Strompreis muss in Cent pro kWh, nicht in Euro pro kWh angegeben werden.",
             "price_not_dynamic_yet": /*FFN*/(dap_enabled: boolean) => <>
-                Ladevorgänge werden immer mit dem hier konfigurierten Strompreis aufgezeichnet.<br/>
+                Ladevorgaenge mit Day-Ahead-Preis werden dynamisch berechnet, sobald Preis- und Zaehlerdaten verfuegbar sind.<br/>
                 {dap_enabled ?
-                    <>Der dynamische Strompreis wird <strong>nicht</strong> aufgezeichnet!</>:
-                    <>Ein dynamischer Strompreis (momentan nicht konfiguriert) wird <strong>nicht</strong> aufgezeichnet.</>}<br/>
+                    <>Fuer alte oder unvollstaendige Eintraege wird der hier konfigurierte Strompreis als Fallback verwendet.</>:
+                    <>Da Day-Ahead-Preise momentan nicht konfiguriert sind, wird der hier konfigurierte Strompreis verwendet.</>}<br/>
                 <>Es wird immer die gesamte ins Fahrzeug geladene Energie aufgezeichnet. Es wird <strong>nicht</strong> nach
                   Herkunft (Netzanschluss, Batteriespeicher, PV, etc.) unterschieden!</>
             </>/*NF*/,

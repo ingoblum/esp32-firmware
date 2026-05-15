@@ -213,11 +213,16 @@ String CSVChargeLogGenerator::generateCSVHeader(const CSVGenerationParams& param
     headers[6] = CSVTranslations::getHeaderMeterEnd(params.language);
     headers[7] = CSVTranslations::getHeaderUsername(params.language);
 
-    if (params.electricity_price > 0) {
+    if (params.dynamic_prices || params.electricity_price > 0) {
         char price_header[64];
         float price_per_kwh = params.electricity_price / 10000.0f;
-        snprintf(price_header, sizeof(price_header), "%s %.2f ct/kWh",
-        CSVTranslations::getHeaderPrice(params.language), price_per_kwh * 100);
+        if (params.dynamic_prices) {
+            snprintf(price_header, sizeof(price_header), "%s",
+                     CSVTranslations::getHeaderPrice(params.language));
+        } else {
+            snprintf(price_header, sizeof(price_header), "%s %.2f ct/kWh",
+                     CSVTranslations::getHeaderPrice(params.language), price_per_kwh * 100);
+        }
 
         String price_header_str = String(price_header);
         if (params.language == Language::German) {
@@ -253,7 +258,7 @@ String CSVChargeLogGenerator::convertToWindows1252(const String& utf8_string) {
 }
 
 bool CSVChargeLogGenerator::readChargeRecords(uint32_t first_record, uint32_t last_record,
-                                              std::function<esp_err_t(const uint8_t* record_data, size_t record_size, bool last)> record_callback) {
+                                              std::function<esp_err_t(const uint8_t* record_data, size_t record_size, uint32_t file_idx, uint32_t charge_idx, bool last)> record_callback) {
 
     uint8_t buffer[sizeof(Charge)];
     for (uint32_t file_idx = first_record; file_idx <= last_record; file_idx++) {
@@ -282,7 +287,7 @@ bool CSVChargeLogGenerator::readChargeRecords(uint32_t first_record, uint32_t la
             }
 
             bool last = i == (complete_records - 1);
-            if (record_callback(buffer, record_size, last) != ESP_OK) {
+            if (record_callback(buffer, record_size, file_idx, i, last) != ESP_OK) {
                 logger.printfln("Record callback requested to stop reading further records.");
                 file.close();
                 return false;
@@ -334,7 +339,7 @@ int CSVChargeLogGenerator::generateCSV(const CSVGenerationParams& params,
     accumulated_data.reserve(MAX_ACCUMULATED);
 
     int rc = readChargeRecords(charge_tracker.first_charge_record, charge_tracker.last_charge_record,
-        [&](const uint8_t* record_data, size_t record_size, bool last) -> esp_err_t {
+        [&](const uint8_t* record_data, size_t record_size, uint32_t file_idx, uint32_t charge_idx, bool last) -> esp_err_t {
             const Charge* record = reinterpret_cast<const Charge*>(record_data);
 
             if (!ChargeTracker::include_charge(record->cs, params.user_filter, params.start_timestamp_min, params.end_timestamp_min, params.configured_users))
@@ -346,8 +351,11 @@ int CSVChargeLogGenerator::generateCSV(const CSVGenerationParams& params,
                 energy_charged = record->ce.meter_end - record->cs.meter_start;
             }
 
-            float price_euros = 0.0f;
-            if (params.electricity_price > 0 && !std::isnan(energy_charged) && energy_charged >= 0) {
+            const uint32_t dynamic_cost_cent = charge_tracker.getDynamicCost(file_idx, charge_idx);
+            float price_euros = NAN;
+            if (dynamic_cost_cent != CHARGE_DYNAMIC_COST_UNAVAILABLE) {
+                price_euros = dynamic_cost_cent / 100.0f;
+            } else if (params.electricity_price > 0 && !std::isnan(energy_charged) && energy_charged >= 0) {
                 float price_per_kwh = params.electricity_price / 10000.0f;
                 price_euros = energy_charged * price_per_kwh;
             }
@@ -364,7 +372,7 @@ int CSVChargeLogGenerator::generateCSV(const CSVGenerationParams& params,
             fields[6] = formatEnergy(record->ce.meter_end, params.language);
             fields[7] = display_name; // TODO: a) this should be the username, not the display name and b) we can remove this column completely
 
-            if (params.electricity_price > 0) {
+            if (params.dynamic_prices || params.electricity_price > 0) {
                 fields[8] = formatPrice(price_euros, params.language);
                 field_count = 9;
             }

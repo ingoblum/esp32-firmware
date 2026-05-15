@@ -35,6 +35,11 @@ struct CSVGenerationParams {
     uint32_t start_timestamp_min;
     uint32_t end_timestamp_min;
     uint32_t electricity_price;
+
+    // If true, emit the cost column even when the configured fixed price is
+    // zero. Individual rows will use dynamic sidecar costs when present and
+    // fall back to electricity_price otherwise.
+    bool dynamic_prices;
     Language language;
     uint8_t configured_users[MAX_ACTIVE_USERS];
 
@@ -44,6 +49,7 @@ struct CSVGenerationParams {
         start_timestamp_min(0),
         end_timestamp_min(UINT32_MAX),
         electricity_price(0),
+        dynamic_prices(false),
         language(Language::German) {}
 };
 
@@ -78,7 +84,7 @@ private:
     String getUserName(uint8_t user_id, Language language);
 
     bool readChargeRecords(uint32_t first_record, uint32_t last_record,
-                          std::function<esp_err_t(const uint8_t* record_data, size_t record_size, bool last)> record_callback);
+                          std::function<esp_err_t(const uint8_t* record_data, size_t record_size, uint32_t file_idx, uint32_t charge_idx, bool last)> record_callback);
 
     String generateCSVHeader(const CSVGenerationParams& params);
 

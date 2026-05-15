@@ -49,6 +49,7 @@ export function ChargeTrackerNavbar() {
 }
 
 const MAX_TRACKED_CHARGES = 7680;
+const CHARGE_DYNAMIC_COST_UNAVAILABLE = 0xFFFFFFFF;
 
 type Charge = API.getType["charge_tracker/last_charges"][0];
 type ChargeTrackerConfig = API.getType["charge_tracker/config"];
@@ -98,7 +99,16 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
         [props.users, props.charge.user_id, get_active_language_enum()]
     );
 
-    let have_charge_cost = props.electricity_price > 0 && props.charge.energy_charged != null;
+    // Prefer the backend's dynamic Day Ahead cost when present. Older records
+    // and records without a valid dynamic price keep using the configured fixed
+    // electricity price so the UI stays backward compatible with existing logs.
+    let have_dynamic_cost = props.charge.dynamic_cost != null // Safety check against null, however a null value shouldn't occur.
+        && props.charge.dynamic_cost != CHARGE_DYNAMIC_COST_UNAVAILABLE; // instead CHARGE_DYNAMIC_COST_UNAVAILABLE is used to indicate a missing dynamic cost values
+        
+    let have_charge_cost = have_dynamic_cost || (props.electricity_price > 0 && props.charge.energy_charged != null);
+    let charge_cost = have_dynamic_cost
+        ? props.charge.dynamic_cost / 100
+        : props.electricity_price / 100 * props.charge.energy_charged / 100;
 
     return <ListGroupItem>
         <div class="row justify-content-end">
@@ -127,7 +137,7 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
             <div class="row justify-content-end mb-n2">
                 <div class="col px-0" />
                 <div class="col-auto ps-2 mb-2">
-                    <span style="vertical-align: middle;">{util.toLocaleFixed(props.electricity_price / 100 * props.charge.energy_charged / 100, 2)} €</span>
+                    <span style="vertical-align: middle;">{util.toLocaleFixed(charge_cost, 2)} EUR</span>
                     <span class="ps-2">{wallet_icon}</span>
                 </div>
             </div> : undefined}
@@ -807,7 +817,8 @@ export class ChargeTrackerStatus extends Component {
                 charge_duration: charge_duration,
                 energy_charged: (energy_abs === null || cc.meter_start === null) ? null : (energy_abs - cc.meter_start),
                 timestamp_minutes: cc.timestamp_minutes,
-                user_id: cc.user_id
+                user_id: cc.user_id,
+                dynamic_cost: cc.dynamic_cost
             };
 
             current_charge = <FormRow label={__("charge_tracker.status.current_charge")}>

@@ -12,6 +12,10 @@ interface Charge {
     charge_duration: number;
     user_id: number;
     energy_charged: number;
+    // Cent amount calculated from Day Ahead Prices. 0xFFFFFFFF means that this
+    // record has no dynamic price data and the frontend should use the
+    // configured fixed price fallback instead.
+    dynamic_cost: number;
 }
 
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
@@ -71,6 +75,9 @@ interface current_charge_base {
     meter_start: number;
     evse_uptime_start: number;
     timestamp_minutes: number;
+    // Current in-memory dynamic cost estimate in cents, with 0xFFFFFFFF used
+    // until a Day Ahead price and a valid meter delta have been sampled.
+    dynamic_cost: number;
 }
 
 interface current_charge_nfc {

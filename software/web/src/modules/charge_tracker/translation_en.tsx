@@ -42,10 +42,10 @@ let x = {
             "price": "Electricity price",
             "price_invalid": "The electricity price must be set in cent per kWh, not euro per kWh.",
             "price_not_dynamic_yet": /*FFN*/(dap_enabled: boolean) => <>
-                Charges are always tracked with the electricity price configured here.<br/>
+                Charges with Day Ahead Prices are calculated dynamically once price and meter data are available.<br/>
                 {dap_enabled ?
-                    <>The dynamic pricing is <strong>not</strong> tracked!</>:
-                    <>A dynamic pricing (currently not configured) will <strong>not</strong> be tracked.</>}<br/>
+                    <>Old or incomplete records use the electricity price configured here as a fallback.</>:
+                    <>Because Day Ahead Prices are currently not configured, the electricity price configured here is used.</>}<br/>
                 <>The charged energy is always tracked completely. <strong>No</strong> distinction is
                   made based on its origin (grid, battery storage, PV, etc.)!</>
             </>/*NF*/,

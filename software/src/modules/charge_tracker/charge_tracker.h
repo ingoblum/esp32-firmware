@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include <climits>
+
 #include "module.h"
 #include "config.h"
 #include "language.h"
@@ -53,6 +55,12 @@ public:
     void updateState();
     bool is_user_tracked(uint8_t user_id);
 
+    // Returns the stored dynamic cost in cents for a completed charge or
+    // CHARGE_DYNAMIC_COST_UNAVAILABLE if the sidecar entry is missing. CSV/PDF
+    // generation uses this to prefer dynamic prices while keeping a fixed-price
+    // fallback for old records.
+    uint32_t getDynamicCost(uint32_t file_index, uint32_t charge_index);
+
     size_t completeRecordsInLastFile();
     bool currentlyCharging();
 
@@ -85,10 +93,25 @@ public:
 private:
     bool repair_last(float);
     void repair_charges();
+
+    // Dynamic-price accounting is kept in memory while a charge is active. Each
+    // sample multiplies the newly charged kWh since the previous sample with
+    // the price that was valid for that interval. At charge end only the final
+    // rounded cent value is persisted in the sidecar file.
+    void startDynamicCostTracking(float meter_start);
+    void sampleDynamicCost(float meter_abs = NAN);
+    uint32_t finishDynamicCostTracking(float meter_end);
+    void writeDynamicCost(uint32_t file_index, uint32_t charge_index, uint32_t cost_cent);
     int generate_pdf(std::function<int(const void *buffer, size_t len)> &&callback, int user_filter, uint32_t start_timestamp_min, uint32_t end_timestamp_min, uint32_t current_timestamp_min, Language language, const char *letterhead, int letterhead_lines, WebServerRequest *request);
 
     Config last_charges_prototype;
     Config charge_log_send_prototype;
+
+    uint64_t dynamic_cost_task_id = 0;
+    bool dynamic_cost_tracking = false;
+    float dynamic_cost_last_meter = NAN;
+    int32_t dynamic_cost_last_price = INT32_MAX;
+    double dynamic_cost_cent = 0.0;
 };
 
 /**

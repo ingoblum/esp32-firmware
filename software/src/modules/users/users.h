@@ -80,3 +80,8 @@ public:
 };
 
 void set_led(int16_t mode);
+
+// Exposed for modules that need the same absolute charger meter reading that
+// charge start/stop tracking uses. The dynamic cost calculation deliberately
+// integrates absolute kWh deltas instead of instantaneous power samples.
+float get_energy();
