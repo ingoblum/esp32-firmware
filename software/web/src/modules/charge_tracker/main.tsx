@@ -326,6 +326,10 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
         this.setState({history_modal_charge: charge, history_modal_samples: []});
 
         try {
+            // Use fields that are already present in last_charges instead of
+            // adding backend file/record indices to the WebSocket state. The
+            // latter overflowed the WARP 1 initial WebSocket payload buffer
+            // when repeated across the 30 visible charge records.
             const response = await fetch(`/charge_tracker/charge_history?timestamp=${charge.timestamp_minutes}&duration=${charge.charge_duration}`);
             if (!response.ok) {
                 throw new Error(await response.text());

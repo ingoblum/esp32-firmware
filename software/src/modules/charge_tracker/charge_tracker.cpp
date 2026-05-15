@@ -143,6 +143,18 @@ static bool wants_send(uint32_t current_time_min, uint32_t last_send_time_min)
 
 void ChargeTracker::pre_setup()
 {
+    // Keep charge_tracker/last_charges intentionally small. This state is sent
+    // in the initial WebSocket dump before the frontend is allowed to render.
+    // On WARP 1 the WebSocket payload buffer is only 4480 bytes. Adding
+    // per-record helper fields here once made the serialized last_charges
+    // payload exceed that limit (4847 bytes with 30 records). The WebSocket was
+    // then closed during the initial dump, render_allowed() never became true,
+    // and the Web UI showed only the logo.
+    //
+    // If more per-charge data is needed, prefer a separate HTTP endpoint that
+    // is queried on demand. The dynamic history graph does exactly that: the
+    // frontend sends stable data already present in last_charges and the backend
+    // resolves it to the LittleFS file/record internally.
     last_charges_prototype = Config::Object({
         {"timestamp_minutes", Config::Uint32(0)},
         {"charge_duration", Config::Uint32(0)},
@@ -793,6 +805,12 @@ void ChargeTracker::readNRecords(File *f, size_t records_to_read)
 
 bool ChargeTracker::findDynamicHistoryRecord(uint32_t timestamp_minutes, uint32_t charge_duration, uint32_t *file_index, uint32_t *record_index)
 {
+    // Do not expose file_index/record_index through charge_tracker/last_charges.
+    // Those two small-looking fields are repeated for up to 30 records and were
+    // enough to overflow the WARP 1 initial WebSocket buffer. Instead, the
+    // frontend identifies the clicked charge by timestamp and duration, and we
+    // translate that back to the supplementary LittleFS record only for this
+    // on-demand HTTP request.
     uint8_t buf[CHARGE_RECORD_SIZE];
     ChargeStart cs;
     ChargeEnd ce;
@@ -1176,6 +1194,11 @@ void ChargeTracker::register_urls()
     server.on_HTTPThread("/charge_tracker/charge_history*", HTTP_GET, [this](WebServerRequest request) {
         std::lock_guard<std::mutex> lock{records_mutex};
 
+        // This handler intentionally uses the wildcard form because the local
+        // web server matches query strings as part of the request URI. A normal
+        // "/charge_tracker/charge_history" registration would match the bare
+        // endpoint but return 404 as soon as "?timestamp=...&duration=..." is
+        // appended by the frontend.
         const String uri = request.uri();
         const int query_start = uri.indexOf('?');
         if (query_start < 0) {

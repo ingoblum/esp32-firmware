@@ -16,6 +16,11 @@ interface Charge {
     // record has no dynamic price data and the frontend should use the
     // configured fixed price fallback instead.
     dynamic_cost: number;
+    // Keep this type compact. charge_tracker/last_charges is part of the
+    // initial WebSocket state and WARP 1 only has a 4480-byte payload buffer.
+    // Repeated helper fields such as history file/record indices have already
+    // overflowed that buffer once and left the UI stuck at the logo. Fetch
+    // large or rarely used per-charge data through on-demand HTTP endpoints.
 }
 
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
