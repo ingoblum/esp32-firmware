@@ -33,6 +33,7 @@
 #define NFC_TAG_ID_LENGTH 10
 // For hex strings: two chars per byte plus a separator between each byte
 #define NFC_TAG_ID_STRING_LENGTH (NFC_TAG_ID_LENGTH * 3 - 1)
+#define NFC_TAG_NAME_STRING_LENGTH 32
 
 #define TAG_LIST_LENGTH 9
 

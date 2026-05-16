@@ -20,6 +20,7 @@ let x = {
             "deadtime_max": "Nie",
 
             "tags": "Konfigurierte Tags",
+            "table_name": "Name",
             "table_tag_id": "Tag-ID",
             "table_user_id": "Zugeordneter Benutzer",
             "table_tag_type": "Tag-Typ",
@@ -28,12 +29,14 @@ let x = {
             "add_tag_title": "Tag hinzufügen",
             "add_tag_message": /*SFN*/(have: number, max: number) => `${have} von ${max} Tags konfiguriert`/*NF*/,
             "add_tag_seen_tags": "Zuletzt erkannte Tags",
+            "add_tag_name": "Name",
             "add_tag_user_id": "Zugeordneter Benutzer",
             "add_tag_tag_id": "Tag-ID",
             "add_tag_tag_type": "Tag-Typ",
             "add_tag_description": "Das neue Tag kann zum Anlernen an die rechte Seite der Wallbox gehalten werden. Alternativ können Tag-ID und Tag-Typ manuell angegeben werden.",
 
             "edit_tag_title": "Tag bearbeiten",
+            "edit_tag_name": "Name",
             "edit_tag_tag_id": "Tag-ID",
             "edit_tag_user_id": "Zugeordneter Benutzer",
             "edit_tag_tag_type": "Tag-Typ",

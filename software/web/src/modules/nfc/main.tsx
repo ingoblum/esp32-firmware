@@ -57,11 +57,13 @@ export class NFC extends ConfigComponent<'nfc/config', {}, NFCState> {
               () => __("nfc.script.save_failed"),
               () => __("nfc.script.reboot_content_changed"), {
                 addTag: {
+                    name: "",
                     tag_id: "",
                     user_id: 0,
                     tag_type: "" as any,
                 },
                 editTag: {
+                    name: "",
                     tag_id: "",
                     user_id: 0,
                     tag_type: "" as any,
@@ -158,12 +160,13 @@ export class NFC extends ConfigComponent<'nfc/config', {}, NFCState> {
                     <FormRow label={__("nfc.content.tags")}>
                         <Table nestingDepth={1} // We are not nested, but this also reduces the modal's size to lg
                             tableTill="md"
-                            columnNames={[__("nfc.content.table_tag_id"), __("nfc.content.table_tag_type"), __("nfc.content.table_user_id"), __("nfc.content.table_last_seen")]}
+                            columnNames={[__("nfc.content.table_name"), __("nfc.content.table_tag_id"), __("nfc.content.table_tag_type"), __("nfc.content.table_user_id"), __("nfc.content.table_last_seen")]}
                             rows={state.authorized_tags.map((tag, i) =>
                                 {
                                     let filtered_users = state.userCfg.users.filter((user) => user.id == tag.user_id);
                                     return {
                                     columnValues: [
+                                        tag.name || tag.tag_id,
                                         tag.tag_id.split(":").map((x, i) => i == 0 ? <>{x}</> : <><wbr/>:{x}</>),
                                         translate_unchecked(`nfc.content.type_${tag.tag_type}`),
                                         (tag.user_id == 0 || filtered_users.length == 0 )? __("nfc.script.not_assigned") : filtered_users[0].display_name,
@@ -171,10 +174,15 @@ export class NFC extends ConfigComponent<'nfc/config', {}, NFCState> {
                                     ],
                                     editTitle: __("nfc.content.edit_tag_title"),
                                     onEditShow: async () => {
-                                        this.setState({hasDoubledTags: false, editTag: {tag_id: tag.tag_id, user_id: tag.user_id, tag_type: tag.tag_type}});
+                                        this.setState({hasDoubledTags: false, editTag: {name: tag.name || "", tag_id: tag.tag_id, user_id: tag.user_id, tag_type: tag.tag_type}});
                                         this.currentlyEditing = tag.tag_id;
                                     },
                                     onEditGetChildren: () => [<>
+                                        <FormRow label={__("nfc.content.edit_tag_name")}>
+                                             <InputText value={state.editTag.name}
+                                                onValue={(v) => this.setState({editTag: {...state.editTag, name: v}})}
+                                                maxLength={32} />
+                                        </FormRow>
                                         <FormRow label={__("nfc.content.edit_tag_tag_id")}>
                                              <InputTextPatterned value={state.editTag.tag_id}
                                                 onValue={(v) => {
@@ -223,7 +231,7 @@ export class NFC extends ConfigComponent<'nfc/config', {}, NFCState> {
                             addMessage={__("nfc.content.add_tag_message")(state.authorized_tags.length, MAX_AUTHORIZED_TAGS)}
                             onAddShow={async () => {
                                 this.currentlyEditing = "";
-                                this.setState({addTag: {tag_id: "", user_id: 0, tag_type: "" as any}, hasDoubledTags: false});
+                                this.setState({addTag: {name: "", tag_id: "", user_id: 0, tag_type: "" as any}, hasDoubledTags: false});
                             }}
                             onAddGetChildren={() => [<>
                                 <FormRow label={__("nfc.content.add_tag_seen_tags")}>
@@ -249,6 +257,12 @@ export class NFC extends ConfigComponent<'nfc/config', {}, NFCState> {
                                             )
                                         }</DiscoveryResultGroup>
                                         : <span>{__("nfc.content.add_tag_description")}</span>}
+                                </FormRow>
+                                <FormRow label={__("nfc.content.add_tag_name")}>
+                                    <InputText
+                                        value={state.addTag.name}
+                                        onValue={(v) => this.setState({addTag: {...state.addTag, name: v}})}
+                                        maxLength={32} />
                                 </FormRow>
                                 <FormRow label={__("nfc.content.add_tag_tag_id")}>
                                     <InputTextPatterned
@@ -289,7 +303,7 @@ export class NFC extends ConfigComponent<'nfc/config', {}, NFCState> {
                                 </FormRow>
                             </>]}
                             onAddSubmit={async () => {
-                                this.setState({authorized_tags: state.authorized_tags.concat({tag_id: state.addTag.tag_id, user_id: state.addTag.user_id, tag_type: state.addTag.tag_type})});
+                                this.setState({authorized_tags: state.authorized_tags.concat({name: state.addTag.name, tag_id: state.addTag.tag_id, user_id: state.addTag.user_id, tag_type: state.addTag.tag_type})});
                                 this.setDirty(true);
                             }}
                             />

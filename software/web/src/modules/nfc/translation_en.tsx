@@ -20,6 +20,7 @@ let x = {
             "deadtime_max": "Never",
 
             "tags": "Configured tags",
+            "table_name": "Name",
             "table_tag_id": "Tag ID",
             "table_user_id": "Assigned user",
             "table_tag_type": "Tag type",
@@ -28,12 +29,14 @@ let x = {
             "add_tag_title": "Add tag",
             "add_tag_message": /*SFN*/(have: number, max: number) => `${have} of ${max} tags configured`/*NF*/,
             "add_tag_seen_tags": "Last seen tags",
+            "add_tag_name": "Name",
             "add_tag_user_id": "Assigned user",
             "add_tag_tag_id": "Tag ID",
             "add_tag_tag_type": "Tag type",
             "add_tag_description": "Hold the new tag to the right side of the charger. Tag ID and type can also be typed in manually.",
 
             "edit_tag_title": "Edit tag",
+            "edit_tag_name": "Name",
             "edit_tag_tag_id": "Tag ID",
             "edit_tag_user_id": "Assigned user",
             "edit_tag_tag_type": "Tag type",

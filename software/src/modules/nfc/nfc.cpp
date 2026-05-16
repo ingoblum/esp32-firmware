@@ -58,6 +58,7 @@ void NFC::pre_setup()
     );
 
     config_authorized_tags_prototype = Config::Object({
+        {"name", Config::Str("", 0, NFC_TAG_NAME_STRING_LENGTH)},
         {"user_id", Config::Uint8(0)},
         {"tag_type", Config::Uint(0, 0, 5)},
         {"tag_id", Config::Str("", 0, NFC_TAG_ID_STRING_LENGTH)}

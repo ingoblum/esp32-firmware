@@ -72,9 +72,9 @@ function get_nfc_edit_children(trigger: NfcAutomationTrigger, on_trigger: (trigg
             on_trigger(util.get_updated_union(trigger, {tag_id: t.tag_id, tag_type: t.tag_type}));
         }
         }}>
-            <h5 class="mb-1 pe-2">{t.tag_id}</h5>
+            <h5 class="mb-1 pe-2">{t.name || t.tag_id}</h5>
             <div class="d-flex w-100 justify-content-between">
-                <span class="text-start">{translate_unchecked(`nfc.automation.type_${t.tag_type}`)}</span>
+                <span class="text-start">{t.tag_id} ({translate_unchecked(`nfc.automation.type_${t.tag_type}`)})</span>
                 <span class="text-end">{__("nfc.automation.table_user_id") + ": " + users.find(u => u.id == t.user_id).display_name}</span>
             </div>
         </ListGroupItem>);

@@ -1,4 +1,5 @@
 interface AuthorizedTag {
+    name: string;
     user_id: number;
     tag_type: number;
     tag_id: string;
