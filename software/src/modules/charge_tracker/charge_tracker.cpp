@@ -1030,6 +1030,7 @@ void ChargeTracker::setup()
     // price-boundary error very small without adding flash writes during the
     // charge; only the final cent value is persisted.
     dynamic_cost_task_id = task_scheduler.scheduleWithFixedDelay([this]() {
+        std::lock_guard<std::mutex> lock{this->records_mutex};
         this->sampleDynamicCost();
     }, 30_s, 30_s);
 #endif
