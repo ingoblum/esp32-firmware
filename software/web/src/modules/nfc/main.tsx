@@ -166,7 +166,7 @@ export class NFC extends ConfigComponent<'nfc/config', {}, NFCState> {
                                     let filtered_users = state.userCfg.users.filter((user) => user.id == tag.user_id);
                                     return {
                                     columnValues: [
-                                        tag.name || tag.tag_id,
+                                        tag.name,
                                         tag.tag_id.split(":").map((x, i) => i == 0 ? <>{x}</> : <><wbr/>:{x}</>),
                                         translate_unchecked(`nfc.content.type_${tag.tag_type}`),
                                         (tag.user_id == 0 || filtered_users.length == 0 )? __("nfc.script.not_assigned") : filtered_users[0].display_name,

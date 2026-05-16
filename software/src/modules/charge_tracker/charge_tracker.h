@@ -71,6 +71,7 @@ public:
     // generation uses this to prefer dynamic prices while keeping a fixed-price
     // fallback for old records.
     uint32_t getSupplementaryRecordCost(uint32_t file_index, uint32_t record_index);
+    bool getSupplementaryRecord(uint32_t file_index, uint32_t record_index, ChargeSupplementaryRecord *supplementary_record);
 
     size_t completeRecordsInLastFile();
     bool currentlyCharging();
@@ -115,7 +116,10 @@ private:
     void sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh_milli, bool force);
     void resetDynamicHistoryTracking(float kwh_start);
     void writeDynamicHistorySample(uint32_t file_index, uint32_t record_index, const ChargeDynamicHistorySample &sample);
-    void writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent);
+    void writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent, uint8_t tag_type, const char *tag_id);
+    void getCurrentNfcTag(uint8_t *tag_type, char tag_id[CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH]);
+    void upgradeSupplementaryRecords();
+    bool upgradeSupplementaryRecordFile(uint32_t file_index);
     bool findDynamicHistoryRecord(uint32_t timestamp_minutes, uint32_t charge_duration, uint32_t *file_index, uint32_t *record_index);
     int generate_pdf(std::function<int(const void *buffer, size_t len)> &&callback, int user_filter, uint32_t start_timestamp_min, uint32_t end_timestamp_min, uint32_t current_timestamp_min, Language language, const char *letterhead, int letterhead_lines, WebServerRequest *request);
 

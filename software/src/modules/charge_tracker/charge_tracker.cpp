@@ -97,9 +97,11 @@ String chargeRecordFilename(uint32_t i)
 
 String chargeSupplementaryRecordFilename(uint32_t i)
 {
-    // One supplementary record file exists per charge-record blob. The nth 4-byte entry in
-    // this file belongs to the nth completed 16-byte charge in the matching
-    // charge-record file.
+    // One supplementary record file exists per charge-record blob. The nth
+    // fixed-size entry in this file belongs to the nth completed 16-byte charge
+    // in the matching charge-record file. Older local builds wrote 4-byte
+    // entries containing only the dynamic cost; setupRecords upgrades those
+    // files before normal random-access reads happen.
     char buf[72];
     StringWriter sw(buf, sizeof(buf));
     sw.printf(CHARGE_RECORD_FOLDER "/charge-record-%lu-supplementary.bin", i);
@@ -336,6 +338,9 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
     // by Users is the authoritative end value for both the regular charge log
     // and the dynamic price integration.
     uint32_t dynamic_cost = finishDynamicCostTracking(meter_end);
+    uint8_t tag_type = 0;
+    char tag_id[CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH] = {};
+    getCurrentNfcTag(&tag_type, tag_id);
 
     {
         File file = LittleFS.open(chargeRecordFilename(this->last_charge_record), "a");
@@ -358,7 +363,7 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
     // The charge record is complete now, so the supplementary record can be written at the
     // same zero-based record index. Missing or unavailable dynamic prices are
     // persisted as CHARGE_DYNAMIC_COST_UNAVAILABLE to keep indexing stable.
-    writeSupplementaryRecord(this->last_charge_record, completeRecordsInLastFile() - 1, dynamic_cost);
+    writeSupplementaryRecord(this->last_charge_record, completeRecordsInLastFile() - 1, dynamic_cost, tag_type, tag_id);
     logger.printfln("Tracked end of charge.");
 
     // We've just written the charge record in the file. It is always safe to read it back again.
@@ -556,6 +561,8 @@ bool ChargeTracker::setupRecords()
     this->first_charge_record = first;
     this->last_charge_record = last;
 
+    upgradeSupplementaryRecords();
+
     return true;
 }
 
@@ -712,28 +719,63 @@ bool charged_invalid(ChargeStart cs, ChargeEnd ce)
 
 uint32_t ChargeTracker::getSupplementaryRecordCost(uint32_t file_index, uint32_t record_index)
 {
-    // Absence of the supplementary record file or a short file is expected for old logs and
-    // for records that were written while Day Ahead Prices were disabled.
-    File supplementary_record_file = LittleFS.open(chargeSupplementaryRecordFilename(file_index));
-    if (!supplementary_record_file) {
-        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
-    }
-
-    const size_t offset = record_index * sizeof(ChargeSupplementaryRecord);
-    if (supplementary_record_file.size() < offset + sizeof(ChargeSupplementaryRecord)) {
-        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
-    }
-
     ChargeSupplementaryRecord supplementary_record;
-    supplementary_record_file.seek(offset);
-    if (supplementary_record_file.read(reinterpret_cast<uint8_t *>(&supplementary_record), sizeof(supplementary_record)) != sizeof(supplementary_record)) {
+    if (!getSupplementaryRecord(file_index, record_index, &supplementary_record)) {
         return CHARGE_DYNAMIC_COST_UNAVAILABLE;
     }
 
     return supplementary_record.cost_cent;
 }
 
-void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent)
+bool ChargeTracker::getSupplementaryRecord(uint32_t file_index, uint32_t record_index, ChargeSupplementaryRecord *supplementary_record)
+{
+    // Absence of the supplementary record file or a short file is expected for
+    // old logs and for records that were written while Day Ahead Prices or NFC
+    // metadata were not available.
+    File supplementary_record_file = LittleFS.open(chargeSupplementaryRecordFilename(file_index));
+    if (!supplementary_record_file) {
+        return false;
+    }
+
+    const size_t offset = record_index * sizeof(ChargeSupplementaryRecord);
+    if (supplementary_record_file.size() < offset + sizeof(ChargeSupplementaryRecord)) {
+        return false;
+    }
+
+    supplementary_record_file.seek(offset);
+    if (supplementary_record_file.read(reinterpret_cast<uint8_t *>(supplementary_record), sizeof(*supplementary_record)) != sizeof(*supplementary_record)) {
+        return false;
+    }
+
+    return true;
+}
+
+void ChargeTracker::getCurrentNfcTag(uint8_t *tag_type, char tag_id[CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH])
+{
+    *tag_type = 0;
+    tag_id[0] = '\0';
+
+    const uint8_t authorization_type = current_charge.get("authorization_type")->asUint();
+    if (authorization_type != USERS_AUTH_TYPE_NFC && authorization_type != USERS_AUTH_TYPE_NFC_INJECTION) {
+        return;
+    }
+
+    Config *authorization_info = static_cast<Config *>(current_charge.get("authorization_info"));
+    if (!authorization_info->is<Config::ConfObject>()) {
+        return;
+    }
+
+    Config *tag_type_config = static_cast<Config *>(authorization_info->get_or_null("tag_type"));
+    Config *tag_id_config = static_cast<Config *>(authorization_info->get_or_null("tag_id"));
+    if (tag_type_config == nullptr || tag_id_config == nullptr || !tag_id_config->is<Config::ConfString>()) {
+        return;
+    }
+
+    *tag_type = tag_type_config->asUint();
+    strlcpy(tag_id, tag_id_config->asEphemeralCStr(), CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH);
+}
+
+void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent, uint8_t tag_type, const char *tag_id)
 {
     File supplementary_record_file = LittleFS.open(chargeSupplementaryRecordFilename(file_index), "r+");
     if (!supplementary_record_file) {
@@ -756,8 +798,93 @@ void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t recor
 
     ChargeSupplementaryRecord supplementary_record;
     supplementary_record.cost_cent = cost_cent;
+    supplementary_record.tag_type = tag_type;
+    strlcpy(supplementary_record.tag_id, tag_id, sizeof(supplementary_record.tag_id));
     supplementary_record_file.seek(record_index * sizeof(ChargeSupplementaryRecord));
     supplementary_record_file.write(reinterpret_cast<const uint8_t *>(&supplementary_record), sizeof(supplementary_record));
+}
+
+void ChargeTracker::upgradeSupplementaryRecords()
+{
+    for (uint32_t file_index = this->first_charge_record; file_index <= this->last_charge_record; ++file_index) {
+        if (!upgradeSupplementaryRecordFile(file_index)) {
+            logger.printfln("Failed to upgrade supplementary charge record file %lu.", file_index);
+        }
+    }
+}
+
+bool ChargeTracker::upgradeSupplementaryRecordFile(uint32_t file_index)
+{
+    const String supplementary_filename = chargeSupplementaryRecordFilename(file_index);
+    File supplementary_record_file = LittleFS.open(supplementary_filename);
+    if (!supplementary_record_file) {
+        return true;
+    }
+
+    const size_t supplementary_size = supplementary_record_file.size();
+    const size_t charge_record_count = file_size(LittleFS, chargeRecordFilename(file_index)) / CHARGE_RECORD_SIZE;
+
+    if (supplementary_size == 0) {
+        return true;
+    }
+
+    // Current-format files have one sizeof(ChargeSupplementaryRecord) entry per
+    // completed charge record. Use the charge-record file as the tiebreaker
+    // instead of a magic/version header: sizes such as 140 bytes are otherwise
+    // ambiguous because they could mean 35 legacy entries or 4 current entries.
+    if ((supplementary_size % sizeof(ChargeSupplementaryRecord)) == 0
+     && (supplementary_size / sizeof(ChargeSupplementaryRecord)) == charge_record_count) {
+        return true;
+    }
+
+    // The first local dynamic-cost implementation stored only uint32_t
+    // cost_cent values. Detect that compact format from the entry size and
+    // expand it once during setup; missing NFC metadata is represented by an
+    // empty tag ID and tag_type 0.
+    if ((supplementary_size % CHARGE_SUPPLEMENTARY_RECORD_LEGACY_SIZE) != 0
+     || (supplementary_size / CHARGE_SUPPLEMENTARY_RECORD_LEGACY_SIZE) != charge_record_count) {
+        logger.printfln("Supplementary charge record file %s has unexpected size %u for %u charge records.",
+                        supplementary_filename.c_str(), supplementary_size, charge_record_count);
+        return false;
+    }
+
+    const String tmp_filename = supplementary_filename + ".tmp";
+    LittleFS.remove(tmp_filename);
+
+    File upgraded_file = LittleFS.open(tmp_filename, "w", true);
+    if (!upgraded_file) {
+        return false;
+    }
+
+    supplementary_record_file.seek(0);
+    uint32_t legacy_cost_cent = CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    while (supplementary_record_file.read(reinterpret_cast<uint8_t *>(&legacy_cost_cent), sizeof(legacy_cost_cent)) == sizeof(legacy_cost_cent)) {
+        ChargeSupplementaryRecord upgraded_record;
+        upgraded_record.cost_cent = legacy_cost_cent;
+        if (upgraded_file.write(reinterpret_cast<const uint8_t *>(&upgraded_record), sizeof(upgraded_record)) != sizeof(upgraded_record)) {
+            upgraded_file.close();
+            supplementary_record_file.close();
+            LittleFS.remove(tmp_filename);
+            return false;
+        }
+    }
+
+    upgraded_file.close();
+    supplementary_record_file.close();
+
+    if (!LittleFS.remove(supplementary_filename)) {
+        LittleFS.remove(tmp_filename);
+        return false;
+    }
+
+    if (!LittleFS.rename(tmp_filename, supplementary_filename)) {
+        LittleFS.remove(tmp_filename);
+        return false;
+    }
+
+    logger.printfln("Upgraded supplementary charge record file %s from 4-byte cost entries to %u-byte entries.",
+                    supplementary_filename.c_str(), sizeof(ChargeSupplementaryRecord));
+    return true;
 }
 
 void ChargeTracker::writeDynamicHistorySample(uint32_t file_index, uint32_t record_index, const ChargeDynamicHistorySample &sample)
@@ -1234,25 +1361,35 @@ void ChargeTracker::register_urls()
             return request.send_plain(400, "Invalid query parameters");
         }
 
-        File history_file = LittleFS.open(chargeDynamicHistoryFilename(file_index, record_index));
-        if (!history_file) {
-            return request.send_json(200, "{\"samples\":[]}");
-        }
+        ChargeSupplementaryRecord supplementary_record;
+        const bool have_supplementary_record = getSupplementaryRecord(file_index, record_index, &supplementary_record);
 
         request.beginChunkedResponse_json(200);
-        SEND_CHUNK_OR_FAIL(request, "{\"samples\":[");
+        {
+            char buf[128];
+            StringWriter sw(buf, sizeof(buf));
+            if (have_supplementary_record && supplementary_record.tag_id[0] != '\0') {
+                sw.printf("{\"tag_type\":%u,\"tag_id\":\"%s\",\"samples\":[", supplementary_record.tag_type, supplementary_record.tag_id);
+            } else {
+                sw.puts("{\"tag_id\":\"\",\"samples\":[");
+            }
+            SEND_CHUNK_OR_FAIL(request, sw);
+        }
 
         bool first = true;
-        ChargeDynamicHistorySample sample;
-        while (history_file.read(reinterpret_cast<uint8_t *>(&sample), sizeof(sample)) == sizeof(sample)) {
-            char buf[96];
-            StringWriter sw(buf, sizeof(buf));
-            if (!first) {
-                sw.putc(',');
+        File history_file = LittleFS.open(chargeDynamicHistoryFilename(file_index, record_index));
+        if (history_file) {
+            ChargeDynamicHistorySample sample;
+            while (history_file.read(reinterpret_cast<uint8_t *>(&sample), sizeof(sample)) == sizeof(sample)) {
+                char buf[96];
+                StringWriter sw(buf, sizeof(buf));
+                if (!first) {
+                    sw.putc(',');
+                }
+                first = false;
+                sw.printf("{\"t\":%u,\"w\":%u,\"ct\":%li}", sample.offset_minutes, sample.power_w, sample.price_ct_per_kwh_milli);
+                SEND_CHUNK_OR_FAIL(request, sw);
             }
-            first = false;
-            sw.printf("{\"t\":%u,\"w\":%u,\"ct\":%li}", sample.offset_minutes, sample.power_w, sample.price_ct_per_kwh_milli);
-            SEND_CHUNK_OR_FAIL(request, sw);
         }
 
         SEND_CHUNK_OR_FAIL(request, "]}");

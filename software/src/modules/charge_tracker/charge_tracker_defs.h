@@ -35,11 +35,21 @@
 // whole charge.
 #define CHARGE_DYNAMIC_HISTORY_INTERVAL_MS (5UL * 60UL * 1000UL)
 
-// Dynamic costs are stored in a separate supplementary record file per charge-record file.
+// Dynamic costs and metadata that would bloat or destabilize the original
+// 16-byte charge record are stored in a separate supplementary record file per
+// charge-record file.
 // This sentinel marks charges for which no dynamic-price calculation exists,
 // for example old records that were written before this feature was available.
 #define CHARGE_DYNAMIC_COST_UNAVAILABLE UINT32_MAX
 #define CHARGE_DYNAMIC_HISTORY_PRICE_UNAVAILABLE INT32_MAX
+
+// Keep the NFC tag storage local to the supplementary record format. NFC tag
+// IDs are currently formatted as ten hex bytes with separators ("AA:..."),
+// i.e. 29 visible characters plus the terminating zero.
+#define CHARGE_SUPPLEMENTARY_TAG_ID_STRING_LENGTH 29
+#define CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH (CHARGE_SUPPLEMENTARY_TAG_ID_STRING_LENGTH + 1)
+
+#define CHARGE_SUPPLEMENTARY_RECORD_LEGACY_SIZE sizeof(uint32_t)
 
 struct [[gnu::packed]] ChargeStart {
     uint32_t timestamp_minutes = 0;
@@ -67,11 +77,20 @@ struct [[gnu::packed]] Charge {
 //
 // For each charge record file this information is stored in a supplementary
 // record file named "charge-record-%lu-supplementary.bin" in the same folder.
+//
+// The first local extension stored only the 4-byte cost_cent field. This format
+// adds the NFC tag ID used to start the charge, but deliberately keeps the file
+// headerless: all entries in one file have the same fixed size and setupRecords
+// upgrades old 4-byte entries at boot. Do not append fields without adding a
+// size-based migration; otherwise record_index based random access will silently
+// point at the wrong bytes for older files.
 struct [[gnu::packed]] ChargeSupplementaryRecord {
     uint32_t cost_cent = CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    uint8_t tag_type = 0;
+    char tag_id[CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH] = {};
 };
 
-static_assert(sizeof(ChargeSupplementaryRecord) == 4, "Unexpected size of ChargeSupplementaryRecord");
+static_assert(sizeof(ChargeSupplementaryRecord) == 35, "Unexpected size of ChargeSupplementaryRecord");
 
 // One sample describes the interval ending at offset_minutes after charge
 // start. power_w is the average charged power over that interval. price is

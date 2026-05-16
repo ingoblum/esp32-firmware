@@ -61,6 +61,8 @@ interface ChargeHistorySample {
 }
 
 interface ChargeHistoryResponse {
+    tag_type?: number;
+    tag_id?: string;
     samples?: ChargeHistorySample[];
 }
 
@@ -75,6 +77,8 @@ interface S {
     show_spinner: boolean;
     last_charges: Readonly<Charge[]>;
     history_modal_charge: Charge | null;
+    history_modal_tag_type: number;
+    history_modal_tag_id: string;
     history_modal_samples: ChargeHistorySample[];
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
     new_remote_upload_config: {
@@ -233,6 +237,8 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
                   start_date: new Date(NaN),
                   end_date: new Date(NaN),
                   history_modal_charge: null,
+                  history_modal_tag_type: 0,
+                  history_modal_tag_id: "",
                   history_modal_samples: [],
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
                   remote_upload_configs: [],
@@ -323,7 +329,7 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
     }
 
     async showChargeHistory(charge: Charge) {
-        this.setState({history_modal_charge: charge, history_modal_samples: []});
+        this.setState({history_modal_charge: charge, history_modal_tag_type: 0, history_modal_tag_id: "", history_modal_samples: []});
 
         try {
             // Use fields that are already present in last_charges instead of
@@ -336,7 +342,11 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
             }
 
             const history = await response.json() as ChargeHistoryResponse;
-            this.setState({history_modal_samples: history.samples ?? []});
+            this.setState({
+                history_modal_tag_type: history.tag_type ?? 0,
+                history_modal_tag_id: history.tag_id ?? "",
+                history_modal_samples: history.samples ?? []
+            });
         } catch (e) {
             util.add_alert("charge-history-download", "danger", () => "Ladeverlauf konnte nicht geladen werden", e);
         }
@@ -625,6 +635,18 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
 //#endif
         let sendEmailComponent = <></>;
         let sendEmailDropdown = <></>;
+
+        let history_modal_tag_name = "";
+        if (state.history_modal_tag_id != "" && API.hasFeature("nfc")) {
+            const tag = API.get("nfc/config").authorized_tags.find(t => t.tag_id == state.history_modal_tag_id && t.tag_type == state.history_modal_tag_type);
+            history_modal_tag_name = tag?.name ?? "";
+        }
+
+        const history_modal_tag_text = state.history_modal_tag_id == ""
+            ? __("charge_tracker.content.history_no_nfc")
+            : history_modal_tag_name == ""
+                ? state.history_modal_tag_id
+                : `${history_modal_tag_name} (${state.history_modal_tag_id})`;
 //#if MODULE_REMOTE_ACCESS_AVAILABLE
         sendEmailComponent = <>
                 <FormSeparator heading={__("charge_tracker.content.charge_log_email_send_config")}/>
@@ -705,9 +727,12 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
             <SubPage name="charge_tracker">
                 <Modal size="lg" centered show={state.history_modal_charge != null} onHide={() => this.setState({history_modal_charge: null})}>
                     <Modal.Header closeButton>
-                        <Modal.Title>Ladeverlauf</Modal.Title>
+                        <Modal.Title>{__("charge_tracker.content.history_title")}</Modal.Title>
                     </Modal.Header>
                     <Modal.Body>
+                        <FormRow label={__("charge_tracker.content.history_nfc_tag")}>
+                            <InputText value={history_modal_tag_text}/>
+                        </FormRow>
                         <ChargeHistoryGraph samples={state.history_modal_samples}/>
                     </Modal.Body>
                 </Modal>
