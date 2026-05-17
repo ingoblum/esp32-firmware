@@ -337,6 +337,7 @@ bool ChargeTracker::startCharge(uint32_t timestamp_minutes, float meter_start, u
 
 void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
 {
+logger.orintfln("ChargeTracker::endCharge auferufen");
     std::lock_guard<std::mutex> lock{records_mutex};
     ChargeEnd ce;
     // Finalize before clearing current_charge. The last meter reading supplied
@@ -366,7 +367,7 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
         file.write(buf, sizeof(ce));
     }
     const size_t complete_records = completeRecordsInLastFile();
-
+logger.printfln("Last file has %u complete records",complete_records);
     // Falls durch einen Dateifehler die Records-Datei nur einen einzigen unvollständigen Record hatte,
     // erhielt man complete_records=0. Zunächst wurde hier nicht auf diesen Wert geprüft, so dass der
     // SupplementaryRecord an den Index 0-1 geschrieben wurde. Dort wurde nicht auf den Index getestet
@@ -379,7 +380,7 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
     if (complete_records > 0) {
         writeSupplementaryRecord(this->last_charge_record, complete_records - 1, dynamic_cost, tag_type, tag_id);
     } else {
-        logger.printfln("Can't track end of charge in supplementary record: No records in file %u", this->last_charge_record);
+        logger.printfln("Can't track end of charge in supplementary record: No records in file %lu", this->last_charge_record);
     }
 
     logger.printfln("Tracked end of charge.");
@@ -804,7 +805,7 @@ void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t recor
     // als Index übergeben werden, teste ich zu Sic herheit auf die harte Indexgrenze, die durch die
     // Programmlogik vorgegeben ist, welche ChargeRecord-Dateien nur bis CHARGE_RECORD_MAX_FILE_SIZE vollschreibt.
     if (record_index >= (CHARGE_RECORD_MAX_FILE_SIZE / CHARGE_RECORD_SIZE)) {
-        logger.printfln("Failed to write supplementary record: Index %u is out of bounds for file %u.", record_index, file_index);
+        logger.printfln("Failed to write supplementary record: Index %lu is out of bounds for file %lu.", record_index, file_index);
         return;
     }
 
