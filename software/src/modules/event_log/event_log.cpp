@@ -379,34 +379,37 @@ logger.printfln_prefixed("event_log", 9,"EventLog::update_syslog_config");
         close(syslog_socket);
         syslog_socket = -1;
     }
-logger.printfln_prefixed("event_log", 9,"Checking is config is enabled");
+
+logger.printfln_prefixed("event_log", 9,"Checking if config is enabled");
     if (!config.get("enabled")->asBool()) {
         return;
     }
+
 logger.printfln_prefixed("event_log", 9,"Creating socket");
-    syslog_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (syslog_socket < 0) {
+    int new_syslog_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (new_syslog_socket < 0) {
         return;
     }
 
     // Set non-blocking to ensure logging doesn't block the system
-    int flags = fcntl(syslog_socket, F_GETFL, 0);
+    int flags = fcntl(new_syslog_socket, F_GETFL, 0);
     if (flags != -1) {
-        fcntl(syslog_socket, F_SETFL, flags | O_NONBLOCK);
+        fcntl(new_syslog_socket, F_SETFL, flags | O_NONBLOCK);
     }
 
     memset(&syslog_dest, 0, sizeof(syslog_dest));
     syslog_dest.sin_family = AF_INET;
     syslog_dest.sin_port = htons(config.get("port")->asUint());
-    
+
 logger.printfln_prefixed("event_log", 9,"Retrieving hostname");
     const char* host = config.get("host")->asUnsafeCStr();
     if (host[0] == '\0' || inet_aton(host, &syslog_dest.sin_addr) == 0) {
 logger.printfln_prefixed("event_log", 9,"Hostname is empty => clearing socket");
-        close(syslog_socket);
-        syslog_socket = -1;
+        close(new_syslog_socket);
         return;
     }
+
+    syslog_socket = new_syslog_socket;
 }
 
 void EventLog::format_timestamp(char buf[EVENT_LOG_TIMESTAMP_LENGTH + 1 /* \0 */])
