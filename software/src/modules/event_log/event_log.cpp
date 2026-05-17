@@ -113,6 +113,8 @@ void EventLog::pre_setup()
         this->update_syslog_config();
         return String();
     });
+
+    api.restorePersistentConfig("event_log/syslog_config", &config);
 }
 
 #define CHUNK_SIZE 1024U

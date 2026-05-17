@@ -885,7 +885,7 @@ Option<int32_t> DayAheadPrices::get_current_price()
         return {};
     }
 
-    return (int32_t)std::round(state.get("current_price")->asInt()*(1 + config.get("vat")->asUint()/10000.0));
+    return (int32_t)std::round(state.get("current_price")->asInt()*(1 + config.get("vat")->asUint()/10000.0)) + get_grid_cost_plus_tax_plus_markup();
 }
 
 int32_t DayAheadPrices::get_grid_cost_plus_tax_plus_markup()

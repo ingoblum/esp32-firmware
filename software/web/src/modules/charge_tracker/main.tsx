@@ -194,7 +194,9 @@ function ChargeHistoryGraph(props: {samples: ChargeHistorySample[]}) {
         <line x1={left} y1={top + plot_h} x2={left + plot_w} y2={top + plot_h} stroke="currentColor" opacity="0.35" />
         <line x1={left + plot_w} y1={top} x2={left + plot_w} y2={top + plot_h} stroke="currentColor" opacity="0.2" />
         <polyline points={power_points} fill="none" stroke="#0d6efd" stroke-width="2.5" />
+        {samples.map(s => <circle cx={x(s.t)} cy={y_power(s.w)} r="2.5" fill="#0d6efd" />)}
         <polyline points={price_points} fill="none" stroke="#dc3545" stroke-width="2.5" />
+        {samples.filter(s => s.ct != 0x7FFFFFFF).map(s => <circle cx={x(s.t)} cy={y_price(s.ct / 1000)} r="2.5" fill="#dc3545" />)}
         <text x={left} y={height - 8} font-size="12" fill="currentColor">0 min</text>
         <text x={left + plot_w} y={height - 8} font-size="12" text-anchor="end" fill="currentColor">{max_t} min</text>
         <text x={8} y={top + 8} font-size="12" fill="#0d6efd">{util.toLocaleFixed(max_w / 1000, 1)} kW</text>

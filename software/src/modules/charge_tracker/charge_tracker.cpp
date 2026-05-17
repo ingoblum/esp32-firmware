@@ -800,19 +800,21 @@ void ChargeTracker::getCurrentNfcTag(uint8_t *tag_type, char tag_id[CHARGE_SUPPL
 
 void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent, uint8_t tag_type, const char *tag_id)
 {
-    // Von endCharge konnte diese Methode mit einem Fehlerhaften Index (uint32_t)-1 aufgerufen werden.
-    // Zwar wurde dort ein Check eingerichtet, aber um dennoch im Fehlerfall den Flash nicht vollzuschreiben,
-    // falls unverhältnismäßig große Werte für den Index, bzw. auf unsigned gecastete negative Werte
-    // als Index übergeben werden, teste ich zu Sic herheit auf die harte Indexgrenze, die durch die
-    // Programmlogik vorgegeben ist, welche ChargeRecord-Dateien nur bis CHARGE_RECORD_MAX_FILE_SIZE vollschreibt.
+    logger.printfln("writeSupplementaryRecord aufgerufen. file_index: %lu, record_index: %lu", file_index, record_index);
     if (record_index >= (CHARGE_RECORD_MAX_FILE_SIZE / CHARGE_RECORD_SIZE)) {
         logger.printfln("Failed to write supplementary record: Index %lu is out of bounds for file %lu.", record_index, file_index);
         return;
     }
 
-    File supplementary_record_file = LittleFS.open(chargeSupplementaryRecordFilename(file_index), "r+");
+    String filename = chargeSupplementaryRecordFilename(file_index);
+    logger.printfln("Oeffne Datei: %s", filename.c_str());
+
+    File supplementary_record_file = LittleFS.open(filename, "r+");
     if (!supplementary_record_file) {
-        supplementary_record_file = LittleFS.open(chargeSupplementaryRecordFilename(file_index), "w", true);
+        logger.printfln("Datei existiert nicht. Erstelle neu mit Modus w.");
+        supplementary_record_file = LittleFS.open(filename, "w", true);
+    } else {
+        logger.printfln("Datei erfolgreich mit Modus r+ geoffnet. Aktuelle Groesse: %u", supplementary_record_file.size());
     }
 
     if (!supplementary_record_file) {
@@ -824,20 +826,48 @@ void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t recor
     // valid even if a previous write failed or an older firmware produced
     // charge records without dynamic-cost side data.
     ChargeSupplementaryRecord unavailable;
-    while (supplementary_record_file.size() < record_index * sizeof(ChargeSupplementaryRecord)) {
+    uint32_t target_size = record_index * sizeof(ChargeSupplementaryRecord);
+    logger.printfln("Zielgroesse fuer Padding: %lu (record_index * %u)", target_size, sizeof(ChargeSupplementaryRecord));
+
+    int loop_counter = 0;
+    while (supplementary_record_file.size() < target_size) {
+        size_t size_before = supplementary_record_file.size();
+        logger.printfln("Padding loop %d: Groesse davor: %u", loop_counter, size_before);
+
         supplementary_record_file.seek(0, SeekMode::SeekEnd);
-        if (supplementary_record_file.write(reinterpret_cast<const uint8_t *>(&unavailable), sizeof(unavailable)) != sizeof(unavailable)) {
-            logger.printfln("Failed to pad supplementary record: disk full or I/O error.");
+        size_t written = supplementary_record_file.write(reinterpret_cast<const uint8_t *>(&unavailable), sizeof(unavailable));
+        size_t size_after = supplementary_record_file.size();
+
+        logger.printfln("Padding loop %d: %u Bytes geschrieben. Groesse danach: %u", loop_counter, written, size_after);
+
+        if (written != sizeof(unavailable)) {
+            logger.printfln("Failed to pad supplementary record: disk full or I/O error. Written: %u", written);
+            break;
+        }
+
+        if (size_after == size_before) {
+            logger.printfln("WARNUNG: Dateigroesse hat sich nach write() nicht veraendert! Breche Schleife ab, um Endlosschleife zu verhindern.");
+            break;
+        }
+
+        loop_counter++;
+        if (loop_counter > 256) {
+            logger.printfln("FEHLER: Notausstieg aus der Padding-Schleife nach 256 Durchlaeufen!");
             break;
         }
     }
 
+    logger.printfln("Schreibe eigentlichen Record an Position: %lu", record_index * sizeof(ChargeSupplementaryRecord));
     ChargeSupplementaryRecord supplementary_record;
     supplementary_record.cost_cent = cost_cent;
     supplementary_record.tag_type = tag_type;
     strlcpy(supplementary_record.tag_id, tag_id, sizeof(supplementary_record.tag_id));
-    supplementary_record_file.seek(record_index * sizeof(ChargeSupplementaryRecord));
-    supplementary_record_file.write(reinterpret_cast<const uint8_t *>(&supplementary_record), sizeof(supplementary_record));
+    
+    bool seek_ok = supplementary_record_file.seek(record_index * sizeof(ChargeSupplementaryRecord));
+    logger.printfln("Seek Ergebnis: %d", seek_ok);
+    
+    size_t final_written = supplementary_record_file.write(reinterpret_cast<const uint8_t *>(&supplementary_record), sizeof(supplementary_record));
+    logger.printfln("Record geschrieben. %u Bytes geschrieben. Neue Dateigroesse: %u", final_written, supplementary_record_file.size());
 }
 
 void ChargeTracker::upgradeSupplementaryRecords()
