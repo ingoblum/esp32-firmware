@@ -35,12 +35,14 @@
 #include <inttypes.h>
 #include <miniz.h>
 #include <TFJson.h>
+#include <lwip/inet.h>
 
 #include "event_log_prefix.h"
 #include "generated/module_dependencies.h"
 #include "build.h"
 #include "options.h"
 #include "tools/printf.h"
+#include "../api/api.h"
 
 struct deflate_outbuf {
     char outbuf[1274]; // 1390 (conservative optimal WireGuard MTU) - 8 (PPPoE) - 40 (IP) - 60 (max TCP) - 8 (HTTP chunk metadata)
@@ -101,6 +103,15 @@ void EventLog::pre_setup()
 {
     boot_id = Config::Object({
         {"boot_id", Config::Uint32(0)}
+    });
+
+    config = ConfigRoot(Config::Object({
+        {"enabled", Config::Bool(false)},
+        {"host", Config::Str("", 0, 255)},
+        {"port", Config::Uint16(514)}
+    }), [this](Config &, ConfigSource) {
+        this->update_syslog_config();
+        return String();
     });
 }
 
@@ -349,6 +360,7 @@ void EventLog::register_urls()
     });
 
     api.addState("event_log/boot_id", &boot_id);
+    api.addPersistentConfig("event_log/syslog_config", &config);
 }
 
 void EventLog::post_setup()
@@ -356,6 +368,45 @@ void EventLog::post_setup()
     // Entropy is created by the wifi modem.
     auto id = esp_random();
     boot_id.get("boot_id")->updateUint(id);
+
+    update_syslog_config();
+}
+
+void EventLog::update_syslog_config()
+{
+logger.printfln_prefixed("event_log", 9,"EventLog::update_syslog_config");
+    if (syslog_socket >= 0) {
+        close(syslog_socket);
+        syslog_socket = -1;
+    }
+logger.printfln_prefixed("event_log", 9,"Checking is config is enabled");
+    if (!config.get("enabled")->asBool()) {
+        return;
+    }
+logger.printfln_prefixed("event_log", 9,"Creating socket");
+    syslog_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (syslog_socket < 0) {
+        return;
+    }
+
+    // Set non-blocking to ensure logging doesn't block the system
+    int flags = fcntl(syslog_socket, F_GETFL, 0);
+    if (flags != -1) {
+        fcntl(syslog_socket, F_SETFL, flags | O_NONBLOCK);
+    }
+
+    memset(&syslog_dest, 0, sizeof(syslog_dest));
+    syslog_dest.sin_family = AF_INET;
+    syslog_dest.sin_port = htons(config.get("port")->asUint());
+    
+logger.printfln_prefixed("event_log", 9,"Retrieving hostname");
+    const char* host = config.get("host")->asUnsafeCStr();
+    if (host[0] == '\0' || inet_aton(host, &syslog_dest.sin_addr) == 0) {
+logger.printfln_prefixed("event_log", 9,"Hostname is empty => clearing socket");
+        close(syslog_socket);
+        syslog_socket = -1;
+        return;
+    }
 }
 
 void EventLog::format_timestamp(char buf[EVENT_LOG_TIMESTAMP_LENGTH + 1 /* \0 */])
@@ -465,6 +516,10 @@ size_t EventLog::print_plain(const char *buf, size_t len)
         for (size_t i = 0; i < len; ++i) {
             event_buf.push(buf[i]);
         }
+    }
+
+    if (syslog_socket >= 0) {
+        sendto(syslog_socket, buf, len, 0, (struct sockaddr *)&syslog_dest, sizeof(syslog_dest));
     }
 
 #if MODULE_WS_AVAILABLE()

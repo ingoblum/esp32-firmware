@@ -11,11 +11,16 @@
             "debug_report": "Debug-Report + Ereignis-Log",
             "debug_report_file": "Debug-Report",
             "debug_report_no_passwords": "(ohne Passwörter)",
-            "event_log_placeholder": "Lade Ereignis-Log..."
+            "event_log_placeholder": "Lade Ereignis-Log...",
+            "syslog": "Syslog (Netzwerklogging)",
+            "syslog_enabled": "Aktiviert",
+            "syslog_host": "Ziel-Host (IP)",
+            "syslog_port": "Port"
         },
         "script": {
             "load_event_log_error": "Konnte Ereignis-Log nicht laden",
-            "load_debug_report_error": "Konnte Debug-Report nicht laden"
+            "load_debug_report_error": "Konnte Debug-Report nicht laden",
+            "save_failed": "Speichern der Syslog-Konfiguration fehlgeschlagen"
         }
     }
 }

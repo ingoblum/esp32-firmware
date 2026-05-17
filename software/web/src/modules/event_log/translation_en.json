@@ -11,11 +11,16 @@
             "debug_report": "Debug report + event log",
             "debug_report_file": "Debug-report",
             "debug_report_no_passwords": "(without passwords)",
-            "event_log_placeholder": "Loading event log..."
+            "event_log_placeholder": "Loading event log...",
+            "syslog": "Syslog (Network Logging)",
+            "syslog_enabled": "Enabled",
+            "syslog_host": "Destination Host (IP)",
+            "syslog_port": "Port"
         },
         "script": {
             "load_event_log_error": "Failed to load event log",
-            "load_debug_report_error": "Failed to load debug report"
+            "load_debug_report_error": "Failed to load debug report",
+            "save_failed": "Failed to save Syslog configuration"
         }
     }
 }

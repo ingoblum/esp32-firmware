@@ -17,16 +17,20 @@
  * Boston, MA 02111-1307, USA.
  */
 
+import * as API from "../../ts/api";
 import * as util from "../../ts/util";
-import { h, Component } from "preact";
+import { h, Component, Fragment } from "preact";
 import { __ } from "../../ts/translation";
 import { PageHeader } from "../../ts/components/page_header";
-import { Button, Spinner } from "react-bootstrap";
+import { Button, Spinner, Form } from "react-bootstrap";
 import { SubPage } from "../../ts/components/sub_page";
 import { OutputTextarea } from "../../ts/components/output_textarea";
 import { NavbarItem } from "../../ts/components/navbar_item";
 import { Download, FileText } from "react-feather";
 import { blobToBase64 } from "../../ts/util";
+import { ConfigComponent } from "../../ts/components/config_component";
+import { FormRow } from "../../ts/components/form_row";
+import { InputNumber } from "../../ts/components/input_number";
 
 export function EventLogNavbar() {
     return <NavbarItem name="event_log" module="event_log" title={__("event_log.navbar.event_log")} symbol={<FileText />} />;
@@ -43,18 +47,55 @@ const RELATIVE_TIME_REGEX = /^\s+(\d+),(\d{3}) $/;
 const LOG_MAX_LEN = 10 * 1024 * 1024;
 const LOG_CHUNK_LEN_DROPPED_WHEN_FULL = 1024 * 1024;
 
+class SyslogConfig extends ConfigComponent<'event_log/syslog_config'> {
+    constructor() {
+        super('event_log/syslog_config', () => __("event_log.script.save_failed"));
+    }
+
+    setAndMarkDirty<T extends keyof API.getType['event_log/syslog_config']>(key: T, value: API.getType['event_log/syslog_config'][T]) {
+        this.setState({ [key]: value, internal_isDirty: true } as any);
+    }
+
+    override async sendSave(topic: 'event_log/syslog_config', cfg: API.getType['event_log/syslog_config']) {
+        await super.sendSave(topic, cfg);
+        this.setDirty(false);
+    }
+
+    render(props: {}, state: Readonly<any>) {
+        if (!state) return null;
+        return (
+            <div className="mt-4">
+                <h4>{__("event_log.content.syslog")}</h4>
+                <hr />
+                <FormRow label={__("event_log.content.syslog_enabled")}>
+                    <Form.Check type="switch" checked={state['enabled']} onChange={() => this.setAndMarkDirty("enabled", !state['enabled'])} />
+                </FormRow>
+                <FormRow label={__("event_log.content.syslog_host")}>
+                    <Form.Control type="text" value={state['host']} onInput={(e: any) => this.setAndMarkDirty("host", e.target.value)} />
+                </FormRow>
+                <FormRow label={__("event_log.content.syslog_port")}>
+                    <InputNumber min={1} max={65535} value={state['port']} onValue={(v: number) => this.setAndMarkDirty("port", v)} />
+                </FormRow>
+                <div className="mt-2 text-end">
+                    <Button variant="primary" disabled={!this.isDirty()} onClick={this.save}>{__("component.config_form.save")}</Button>
+                </div>
+            </div>
+        );
+    }
+}
+
 export class EventLog extends Component<{}, EventLogState> {
     last_boot_id = -1;
 
     constructor() {
         super();
 
-        util.addApiEventListener("event_log/boot_id", (ev) => {
+        util.addApiEventListener("event_log/boot_id" as any, (ev: any) => {
             this.load_event_log(this.last_boot_id != ev.data.boot_id);
             this.last_boot_id = ev.data.boot_id;
         });
 
-        util.addApiEventListener("event_log/message", (ev) => {
+        util.addApiEventListener("event_log/message" as any, (ev: any) => {
             // If we have not seen the complete log yet, don't add updates.
             if (!this.state.log)
                 return;
@@ -234,6 +275,8 @@ export class EventLog extends Component<{}, EventLogState> {
                         </span>
                     </Button>
                 </div>
+
+                <SyslogConfig />
             </SubPage>
         );
     }

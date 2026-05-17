@@ -22,6 +22,12 @@
 #include <stdarg.h>
 #include <mutex>
 
+// GC-Fix: Avoid conflict with Arduino's IPAddress.h by undefining INADDR_NONE after including lwip/sockets.h
+#include <lwip/sockets.h>
+#ifdef INADDR_NONE
+#undef INADDR_NONE
+#endif
+
 #include "module.h"
 #include "config.h"
 #include "tools/ringbuffer.h"
@@ -82,6 +88,9 @@ public:
     size_t alloc_trace_buffer(const char *name, size_t size);
     size_t get_trace_buffer_idx(const char *name);
 
+    ConfigRoot boot_id;
+    ConfigRoot config;
+
 private:
     std::mutex event_buf_mutex;
     TF_PackedRingbuffer<char,
@@ -94,6 +103,9 @@ private:
 #endif
                         free_any> event_buf;
 
+    int syslog_socket = -1;
+    struct sockaddr_in syslog_dest;
+    void update_syslog_config();
 
     struct TraceBuffer {
         const char *name;
@@ -111,8 +123,6 @@ private:
     size_t trace_buffer_size_allocd = 0;
     static constexpr size_t MAX_TRACE_BUFFERS_SIZE = 3 << 20;
 #endif
-
-    ConfigRoot boot_id;
 };
 
 #define vprintfln(fmt, args)          vprintfln_prefixed(event_log_prefix, event_log_prefix_len, fmt, args)
