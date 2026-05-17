@@ -826,7 +826,10 @@ void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t recor
     ChargeSupplementaryRecord unavailable;
     while (supplementary_record_file.size() < record_index * sizeof(ChargeSupplementaryRecord)) {
         supplementary_record_file.seek(0, SeekMode::SeekEnd);
-        supplementary_record_file.write(reinterpret_cast<const uint8_t *>(&unavailable), sizeof(unavailable));
+        if (supplementary_record_file.write(reinterpret_cast<const uint8_t *>(&unavailable), sizeof(unavailable)) != sizeof(unavailable)) {
+            logger.printfln("Failed to pad supplementary record: disk full or I/O error.");
+            break;
+        }
     }
 
     ChargeSupplementaryRecord supplementary_record;
