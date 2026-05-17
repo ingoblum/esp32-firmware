@@ -314,14 +314,19 @@ bool ChargeTracker::startCharge(uint32_t timestamp_minutes, float meter_start, u
     file.write(buf, sizeof(cs));
     logger.printfln("Tracked start of charge.");
 
-    current_charge.get("user_id")->updateInt(user_id);
-    current_charge.get("meter_start")->updateFloat(meter_start);
-    current_charge.get("evse_uptime_start")->updateUint(evse_uptime);
-    current_charge.get("timestamp_minutes")->updateUint(timestamp_minutes);
-    current_charge.get("authorization_type")->updateUint(auth_type);
-    current_charge.get("dynamic_cost")->updateUint(CHARGE_DYNAMIC_COST_UNAVAILABLE);
-    current_charge.get("authorization_info")->value = auth_info;
-    current_charge.get("authorization_info")->value.updated = 0xFF;
+    // Die Web-UI schein nicht über das Ladeende informiert zu werden, so dass in Status->Aktiver Ladevorgang die Zeit weiterläuft, obwohl die
+    // Ladung im EVSE bereits gestoppt ist. Um Race-Conditions zu vermeiden verschiebe ich den Update der UI in den Hauptthread.
+    ensure_running_in_main_task([this, user_id, meter_start, evse_uptime, timestamp_minutes, auth_type, auth_info = std::move(auth_info)]() {
+        current_charge.get("user_id")->updateInt(user_id);
+        current_charge.get("meter_start")->updateFloat(meter_start);
+        current_charge.get("evse_uptime_start")->updateUint(evse_uptime);
+        current_charge.get("timestamp_minutes")->updateUint(timestamp_minutes);
+        current_charge.get("authorization_type")->updateUint(auth_type);
+        current_charge.get("dynamic_cost")->updateUint(CHARGE_DYNAMIC_COST_UNAVAILABLE);
+        current_charge.get("authorization_info")->value = auth_info;
+        current_charge.get("authorization_info")->value.updated = 0xFF;
+    });
+
     // Start cost accounting only after the normal charge start was persisted.
     // If the regular charge tracking rejects the start, no dynamic side data is
     // created either.
@@ -360,10 +365,23 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
 
         file.write(buf, sizeof(ce));
     }
+    const size_t complete_records = completeRecordsInLastFile();
+
+    // Falls durch einen Dateifehler die Records-Datei nur einen einzigen unvollständigen Record hatte,
+    // erhielt man complete_records=0. Zunächst wurde hier nicht auf diesen Wert geprüft, so dass der
+    // SupplementaryRecord an den Index 0-1 geschrieben wurde. Dort wurde nicht auf den Index getestet
+    // und so kam es zu einer Endlosschleife, weil bis (uint32_t)-1*sizeof(ChargeSupplementaryRecord)
+    // die Datei mit Padding-Bytes aufgefüllt wurde.
+    //
     // The charge record is complete now, so the supplementary record can be written at the
     // same zero-based record index. Missing or unavailable dynamic prices are
     // persisted as CHARGE_DYNAMIC_COST_UNAVAILABLE to keep indexing stable.
-    writeSupplementaryRecord(this->last_charge_record, completeRecordsInLastFile() - 1, dynamic_cost, tag_type, tag_id);
+    if (complete_records > 0) {
+        writeSupplementaryRecord(this->last_charge_record, complete_records - 1, dynamic_cost, tag_type, tag_id);
+    } else {
+        logger.printfln("Can't track end of charge in supplementary record: No records in file %u", this->last_charge_record);
+    }
+
     logger.printfln("Tracked end of charge.");
 
     // We've just written the charge record in the file. It is always safe to read it back again.
@@ -374,15 +392,18 @@ void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
     f.seek(-CHARGE_RECORD_SIZE, SeekMode::SeekEnd);
     this->readNRecords(&f, 1);
 
-    current_charge.get("user_id")->updateInt(-1);
-    current_charge.get("meter_start")->updateFloat(0);
-    current_charge.get("evse_uptime_start")->updateUint(0);
-    current_charge.get("timestamp_minutes")->updateUint(0);
-    current_charge.get("authorization_type")->updateUint(0);
-    current_charge.get("dynamic_cost")->updateUint(CHARGE_DYNAMIC_COST_UNAVAILABLE);
-    current_charge.get("authorization_info")->value = Config::ConfVariant{};
+    // Ensure thread safety for Web UI updates to prevent "ghosting" charges and crashes
+    ensure_running_in_main_task([this]() {
+        current_charge.get("user_id")->updateInt(-1);
+        current_charge.get("meter_start")->updateFloat(0);
+        current_charge.get("evse_uptime_start")->updateUint(0);
+        current_charge.get("timestamp_minutes")->updateUint(0);
+        current_charge.get("authorization_type")->updateUint(0);
+        current_charge.get("dynamic_cost")->updateUint(CHARGE_DYNAMIC_COST_UNAVAILABLE);
+        current_charge.get("authorization_info")->value = Config::ConfVariant{};
 
-    updateState();
+        updateState();
+    });
 }
 
 bool ChargeTracker::is_user_tracked(uint8_t user_id)
@@ -777,6 +798,16 @@ void ChargeTracker::getCurrentNfcTag(uint8_t *tag_type, char tag_id[CHARGE_SUPPL
 
 void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent, uint8_t tag_type, const char *tag_id)
 {
+    // Von endCharge konnte diese Methode mit einem Fehlerhaften Index (uint32_t)-1 aufgerufen werden.
+    // Zwar wurde dort ein Check eingerichtet, aber um dennoch im Fehlerfall den Flash nicht vollzuschreiben,
+    // falls unverhältnismäßig große Werte für den Index, bzw. auf unsigned gecastete negative Werte
+    // als Index übergeben werden, teste ich zu Sic herheit auf die harte Indexgrenze, die durch die
+    // Programmlogik vorgegeben ist, welche ChargeRecord-Dateien nur bis CHARGE_RECORD_MAX_FILE_SIZE vollschreibt.
+    if (record_index >= (CHARGE_RECORD_MAX_FILE_SIZE / CHARGE_RECORD_SIZE)) {
+        logger.printfln("Failed to write supplementary record: Index %u is out of bounds for file %u.", record_index, file_index);
+        return;
+    }
+
     File supplementary_record_file = LittleFS.open(chargeSupplementaryRecordFilename(file_index), "r+");
     if (!supplementary_record_file) {
         supplementary_record_file = LittleFS.open(chargeSupplementaryRecordFilename(file_index), "w", true);

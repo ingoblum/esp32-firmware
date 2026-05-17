@@ -350,8 +350,18 @@ void Users::setup()
 
     Config *user_slot = get_user_slot();
     bool charge_start_tracked = charge_tracker.currentlyCharging();
-    bool charging = get_charger_state() == 2 || get_charger_state() == 3
-                    || (user_slot->get("active")->asBool() && user_slot->get("max_current")->asUint() == 32000);
+    const uint8_t charger_state = get_charger_state();
+    // Inclusion of READY_TO_CHARGE ensures that an authorized session that hasn't 
+    // technically started "Charging" yet is not prematurely aborted during a reboot.
+    const bool charging = charger_state == CHARGER_STATE_READY_TO_CHARGE || charger_state == CHARGER_STATE_CHARGING;
+    // Legacy behavior also treated "active user slot with max_current == 32000"
+    // as an implicit "charging" signal during setup. This could revive stale
+    // charge tracker state after reboot even when no real charging session was
+    // running. Keep this condition only for diagnostics.
+    const bool legacy_slot_implies_charging = user_slot->get("active")->asBool() && user_slot->get("max_current")->asUint() == 32000;
+    if (!charging && legacy_slot_implies_charging) {
+        logger.printfln("Setup: legacy charging heuristic matched (active user slot + 32000 mA). Old firmware would continue an existing charge record.");
+    }
 
     if (charge_start_tracked && !charging) {
         float override_value = get_energy();
@@ -377,6 +387,12 @@ void Users::setup()
             }
         } else if (!charge_start_tracked)
             this->start_charging(0, 32000, USERS_AUTH_TYPE_NONE, Config::ConfVariant{});
+    } else {
+        UserSlotInfo info;
+        if (read_user_slot_info(&info)) {
+            logger.printfln("Setup: stale user slot info found without active charging state. Clearing persisted user slot info.");
+            zero_user_slot_info();
+        }
     }
 
     auto outer_charger_state = get_charger_state();
