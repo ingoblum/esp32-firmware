@@ -186,8 +186,27 @@ function ChargeHistoryGraph(props: {samples: ChargeHistorySample[]}) {
     const x = (t: number) => left + (t / max_t) * plot_w;
     const y_power = (w: number) => top + plot_h - (w / max_w) * plot_h;
     const y_price = (ct: number) => top + plot_h - ((ct - min_ct) / (max_ct - min_ct)) * plot_h;
-    const power_points = samples.map(s => `${x(s.t)},${y_power(s.w)}`).join(" ");
-    const price_points = samples.filter(s => s.ct != 0x7FFFFFFF).map(s => `${x(s.t)},${y_price(s.ct / 1000)}`).join(" ");
+
+    let power_points = "";
+    for (let i = 0; i < samples.length; i++) {
+        const s = samples[i];
+        if (i === 0) {
+            power_points += `${x(s.t)},${y_power(s.w)}`;
+        } else {
+            power_points += ` ${x(s.t)},${y_power(samples[i - 1].w)} ${x(s.t)},${y_power(s.w)}`;
+        }
+    }
+
+    let price_points = "";
+    const filtered_samples = samples.filter(s => s.ct != 0x7FFFFFFF);
+    for (let i = 0; i < filtered_samples.length; i++) {
+        const s = filtered_samples[i];
+        if (i === 0) {
+            price_points += `${x(s.t)},${y_price(s.ct / 1000)}`;
+        } else {
+            price_points += ` ${x(s.t)},${y_price(filtered_samples[i - 1].ct / 1000)} ${x(s.t)},${y_price(s.ct / 1000)}`;
+        }
+    }
 
     return <svg viewBox={`0 0 ${width} ${height}`} style="width: 100%; height: auto;">
         <line x1={left} y1={top} x2={left} y2={top + plot_h} stroke="currentColor" opacity="0.35" />

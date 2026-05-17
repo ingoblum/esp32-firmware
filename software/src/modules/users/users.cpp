@@ -318,6 +318,14 @@ void Users::pre_setup()
 
         return "Can't enable HTTP authentication if not at least one user with a password is configured!";
     }};
+
+    charge_start = ConfigRoot{Config::Object({
+        {"user_id", Config::Uint8(0)}
+    })};
+
+    charge_stop = ConfigRoot{Config::Object({
+        {"user_id", Config::Uint8(0)}
+    })};
 }
 
 void create_username_file()
@@ -678,6 +686,16 @@ void Users::register_urls()
         config.get("http_auth_enabled")->updateBool(enable);
         API::writeConfig("users/config", &config);
     }, false);
+
+    api.addCommand("users/charge_start", &charge_start, {"user_id"}, [this](Language /*language*/, String &errmsg) {
+        if (!this->trigger_charge_action(charge_start.get("user_id")->asUint(), USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_START, 0_s, 0_s)) {
+            errmsg = "Failed to start charge for user. Please check EVSE state.";
+        }
+    }, true);
+
+    api.addCommand("users/charge_stop", &charge_stop, {"user_id"}, [this](Language /*language*/, String &errmsg) {
+        this->trigger_charge_action(charge_stop.get("user_id")->asUint(), USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_STOP, 0_s, 0_s);
+    }, true);
 
     server.on_HTTPThread("/users/all_usernames", HTTP_GET, [this](WebServerRequest request) {
         //std::lock_guard<std::mutex> lock{records_mutex};

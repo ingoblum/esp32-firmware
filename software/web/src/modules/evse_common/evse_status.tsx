@@ -125,20 +125,35 @@ export class EVSEStatus extends Component<{}, EVSEStatusState> {
 
         for (let u of users) {
             const users_tags = tags.filter(t => t.user_id == u.id);
-            let user_has_multiple_tags = users_tags.length > 1;
 
+            // Option to start charging for this user without an NFC tag
+            result.push(
+                <Dropdown.Item as="button"
+                               className="py-2"
+                               onClick={() => {API.call("users/charge_start",
+                                                        {user_id: u.id} as any,
+                                                        () => __("evse.script.start_charging_failed"));
+                                               API.call("evse/start_charging", {}, () => __("evse.script.start_charging_failed"));}
+                               }>
+                    {u.display_name}
+                </Dropdown.Item>
+            );
+
+            // Options to start charging with a specific NFC tag
             result.push(...users_tags.map(
-                t =>
-                    <Dropdown.Item as="button"
+                t => {
+                    const display_suffix = (t.name && t.name.trim() !== "") ? t.name : t.tag_id;
+                    return <Dropdown.Item as="button"
                                    className="py-2"
                                    onClick={() => {API.call("nfc/inject_tag_start",
                                                             {tag_type: t.tag_type, tag_id: t.tag_id},
                                                             () => __("evse.script.start_charging_failed"));
                                                    API.call("evse/start_charging", {}, () => __("evse.script.start_charging_failed"));}
                                    }>
-                        {u.display_name + (user_has_multiple_tags ? " (" + t.tag_id +")" : "")}
-                    </Dropdown.Item>
-                ))
+                        {u.display_name + " (" + display_suffix + ")"}
+                    </Dropdown.Item>;
+                }
+            ));
         }
         return result;
     }
