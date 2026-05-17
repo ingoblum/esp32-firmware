@@ -337,7 +337,7 @@ bool ChargeTracker::startCharge(uint32_t timestamp_minutes, float meter_start, u
 
 void ChargeTracker::endCharge(uint32_t charge_duration_seconds, float meter_end)
 {
-logger.orintfln("ChargeTracker::endCharge auferufen");
+logger.printfln("ChargeTracker::endCharge aufgerufen");
     std::lock_guard<std::mutex> lock{records_mutex};
     ChargeEnd ce;
     // Finalize before clearing current_charge. The last meter reading supplied
@@ -389,6 +389,7 @@ logger.printfln("Last file has %u complete records",complete_records);
     if (last_charges.count() == CHARGE_RECORD_LAST_CHARGES_SIZE)
         last_charges.remove(0);
 
+logger.printfln("Lese letzen Record wieder ein und füge ihn in die von der UI angezeigten letzten Charge Records ein");
     File f = LittleFS.open(chargeRecordFilename(this->last_charge_record));
     f.seek(-CHARGE_RECORD_SIZE, SeekMode::SeekEnd);
     this->readNRecords(&f, 1);
