@@ -584,6 +584,34 @@ bool ChargeTracker::setupRecords()
     this->first_charge_record = first;
     this->last_charge_record = last;
 
+    // GC pass: Remove orphaned sidecar files that don't belong to an active charge record.
+    folder.rewindDirectory();
+    while (File f = folder.openNextFile()) {
+        String name{f.name()};
+        uint32_t file_index = 0;
+        bool is_record_file = false;
+
+        if (name.endsWith("-supplementary.bin")) {
+            file_index = name.substring(14, name.length() - 18).toInt();
+            is_record_file = true;
+        } else if (name.endsWith("-history.bin")) {
+            // format: charge-record-<file_index>-<record_index>-history.bin
+            int second_dash = name.indexOf('-', 14);
+            if (second_dash != -1) {
+                file_index = name.substring(14, second_dash).toInt();
+                is_record_file = true;
+            }
+        } else if (name.startsWith("charge-record-") && name.endsWith(".bin")) {
+            file_index = name.substring(14, name.length() - 4).toInt();
+            is_record_file = true;
+        }
+
+        if (is_record_file && (file_index < first || file_index > last)) {
+            logger.printfln("Removing orphaned or out-of-range charge record file: %s", name.c_str());
+            LittleFS.remove(String(CHARGE_RECORD_FOLDER) + "/" + name);
+        }
+    }
+
     upgradeSupplementaryRecords();
 
     return true;
