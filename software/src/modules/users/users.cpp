@@ -320,11 +320,13 @@ void Users::pre_setup()
     }};
 
     charge_start = ConfigRoot{Config::Object({
-        {"user_id", Config::Uint8(0)}
+        {"user_id", Config::Uint8(0)},
+        {"username", Config::Str("", 0, USERNAME_LENGTH)}
     })};
 
     charge_stop = ConfigRoot{Config::Object({
-        {"user_id", Config::Uint8(0)}
+        {"user_id", Config::Uint8(0)},
+        {"username", Config::Str("", 0, USERNAME_LENGTH)}
     })};
 }
 
@@ -688,13 +690,49 @@ void Users::register_urls()
     }, false);
 
     api.addCommand("users/charge_start", &charge_start, {"user_id"}, [this](Language /*language*/, String &errmsg) {
-        if (!this->trigger_charge_action(charge_start.get("user_id")->asUint(), USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_START, 0_s, 0_s)) {
+        uint8_t user_id = charge_start.get("user_id")->asUint();
+        const String &username = charge_start.get("username")->asString();
+
+        if (!username.isEmpty()) {
+            bool found = false;
+            for (size_t i = 0; i < config.get("users")->count(); ++i) {
+                if (config.get("users")->get(i)->get("username")->asString() == username) {
+                    user_id = config.get("users")->get(i)->get("id")->asUint();
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                errmsg = "User with username '" + username + "' not found.";
+                return;
+            }
+        }
+
+        if (!this->trigger_charge_action(user_id, USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_START, 0_s, 0_s)) {
             errmsg = "Failed to start charge for user. Please check EVSE state.";
         }
     }, true);
 
     api.addCommand("users/charge_stop", &charge_stop, {"user_id"}, [this](Language /*language*/, String &errmsg) {
-        this->trigger_charge_action(charge_stop.get("user_id")->asUint(), USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_STOP, 0_s, 0_s);
+        uint8_t user_id = charge_stop.get("user_id")->asUint();
+        const String &username = charge_stop.get("username")->asString();
+
+        if (!username.isEmpty()) {
+            bool found = false;
+            for (size_t i = 0; i < config.get("users")->count(); ++i) {
+                if (config.get("users")->get(i)->get("username")->asString() == username) {
+                    user_id = config.get("users")->get(i)->get("id")->asUint();
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                errmsg = "User with username '" + username + "' not found.";
+                return;
+            }
+        }
+
+        this->trigger_charge_action(user_id, USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_STOP, 0_s, 0_s);
     }, true);
 
     server.on_HTTPThread("/users/all_usernames", HTTP_GET, [this](WebServerRequest request) {
