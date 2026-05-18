@@ -212,7 +212,7 @@ class ChargeHistoryGraph extends Component<{samples: ChargeHistorySample[], char
     }
 
     build_cost_data(samples: ChargeHistorySample[], start_seconds: number): UplotData {
-        const first_bin = Math.floor(start_seconds / ChargeHistoryGraph.COST_BIN_SECONDS) * ChargeHistoryGraph.COST_BIN_SECONDS;
+        const first_bin = start_seconds;
         const last_sample = samples[samples.length - 1];
         const end_seconds = start_seconds + Math.max(1, last_sample.t) * 60;
         const bin_count = Math.max(1, Math.ceil((end_seconds - first_bin) / ChargeHistoryGraph.COST_BIN_SECONDS));
@@ -262,6 +262,10 @@ class ChargeHistoryGraph extends Component<{samples: ChargeHistorySample[], char
             data.values[0].push(first_bin + i * ChargeHistoryGraph.COST_BIN_SECONDS);
             data.values[1].push(bins[i]);
         }
+
+        // Force identical x-range with the upper chart so timestamps line up visually.
+        data.values[0].push(end_seconds);
+        data.values[1].push(null);
 
         return data;
     }
