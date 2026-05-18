@@ -22,14 +22,14 @@
 import * as util from "../../ts/util";
 import * as API from "../../ts/api";
 import * as options from "../../options";
-import { h, Fragment, Component, RefObject } from "preact";
+import { h, Fragment, Component, RefObject, createRef } from "preact";
 import { effect } from "@preact/signals-core";
 import { __, get_active_language_enum } from "../../ts/translation";
 import { FormRow } from "../../ts/components/form_row";
 import { FormSeparator } from "../../ts/components/form_separator";
 import { InputText } from "../../ts/components/input_text";
 import { InputDate } from "../../ts/components/input_date";
-import { Button, Collapse, ListGroup, ListGroupItem, Spinner, Dropdown, Row, Modal } from "react-bootstrap";
+import { Button, Collapse, ListGroup, ListGroupItem, Spinner, Dropdown, Modal } from "react-bootstrap";
 import { InputSelect } from "../../ts/components/input_select";
 import { ConfigComponent } from "../../ts/components/config_component";
 import { ConfigForm } from "../../ts/components/config_form";
@@ -37,6 +37,7 @@ import { InputFloat } from "../../ts/components/input_float";
 import { SubPage } from "../../ts/components/sub_page";
 import { Table, TableRow } from "../../ts/components/table";
 import { useMemo } from "preact/hooks";
+import { UplotData, UplotWrapperB, UplotPath } from "../../ts/components/uplot_wrapper_2nd";
 import { NavbarItem } from "../../ts/components/navbar_item";
 import { StatusSection } from "../../ts/components/status_section";
 import { BatteryCharging, Calendar, Clock, Download, User, List, Send, Mail } from "react-feather";
@@ -162,144 +163,188 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
     </ListGroupItem>
 }
 
-function ChargeHistoryGraph(props: {samples: ChargeHistorySample[], charge_start_timestamp_min: number}) {
-    const samples = props.samples ?? [];
-    if (samples.length == 0) {
-        return <div class="text-muted">Keine Verlaufsdaten vorhanden.</div>;
+class ChargeHistoryGraph extends Component<{samples: ChargeHistorySample[], charge_start_timestamp_min: number}, {}> {
+    power_price_ref = createRef<UplotWrapperB>();
+    cost_ref = createRef<UplotWrapperB>();
+    sync = {key: "charge_tracker_history"} as any;
+    static readonly COST_BIN_SECONDS = 30 * 60;
+
+    override componentDidMount() {
+        this.update_uplot();
     }
 
-    const width = 720;
-    const height = 330;
-    const left = 48;
-    const right = 54;
-    const top = 14;
-    const bottom = 46;
-    const plot_w = width - left - right;
-    const top_plot_h = 172;
-    const plot_gap = 18;
-    const cost_plot_top = top + top_plot_h + plot_gap;
-    const cost_plot_h = height - bottom - cost_plot_top;
+    override componentDidUpdate() {
+        this.update_uplot();
+    }
 
-    const max_t = Math.max(...samples.map(s => s.t), 1);
-    const max_w = Math.max(...samples.map(s => s.w), 1);
-    const valid_prices = samples.filter(s => s.ct != 0x7FFFFFFF).map(s => s.ct / 1000);
-    const min_ct = valid_prices.length == 0 ? 0 : Math.min(...valid_prices);
-    const max_ct = valid_prices.length == 0 ? 1 : Math.max(...valid_prices, min_ct + 1);
-    const charge_start_ms = props.charge_start_timestamp_min * 60 * 1000;
-    const charge_end_ms = charge_start_ms + max_t * 60 * 1000;
+    build_power_price_data(samples: ChargeHistorySample[], start_seconds: number): UplotData {
+        const last = samples[samples.length - 1];
+        const end_seconds = last == null ? start_seconds : start_seconds + Math.max(1, last.t) * 60;
+        const data: UplotData = {
+            keys: [null, "power", "price"],
+            names: [null, "Leistung", "Börsenpreis inkl. MwSt."],
+            values: [[], [], []],
+            paths: [null, UplotPath.Step, UplotPath.Step],
+            y_axes: [null, "y", "y2"],
+            lines_vertical: [
+                {index: 0, text: "Start", color: [64, 64, 64, 0.10]},
+                {index: samples.length, text: "Ende", color: [64, 64, 64, 0.10]},
+            ],
+        };
 
-    const x = (t: number) => left + (t / max_t) * plot_w;
-    const y_power = (w: number) => top + top_plot_h - (w / max_w) * top_plot_h;
-    const y_price = (ct: number) => top + top_plot_h - ((ct - min_ct) / (max_ct - min_ct)) * top_plot_h;
+        data.values[0].push(start_seconds);
+        data.values[1].push(samples[0].w / 1000.0);
+        data.values[2].push(samples[0].ct == 0x7FFFFFFF ? null : samples[0].ct / 1000.0);
 
-    type CostBar = {
-        t_from: number;
-        t_to: number;
-        cost_ct: number;
-    };
-    const cost_bars: CostBar[] = [];
-    let previous_t = 0;
-    for (const s of samples) {
-        const interval_minutes = Math.max(0, s.t - previous_t);
-        previous_t = s.t;
-
-        if (interval_minutes == 0 || s.ct == 0x7FFFFFFF) {
-            continue;
+        for (const s of samples) {
+            data.values[0].push(start_seconds + s.t * 60);
+            data.values[1].push(s.w / 1000.0);
+            data.values[2].push(s.ct == 0x7FFFFFFF ? null : s.ct / 1000.0);
         }
 
-        const energy_kwh = (s.w / 1000.0) * (interval_minutes / 60.0);
-        const price_ct_per_kwh = s.ct / 1000.0;
-        const cost_ct = energy_kwh * price_ct_per_kwh;
-        cost_bars.push({t_from: s.t - interval_minutes, t_to: s.t, cost_ct});
-    }
-
-    const max_cost_ct = Math.max(...cost_bars.map(b => b.cost_ct), 0.01);
-    const y_cost = (cost_ct: number) => cost_plot_top + cost_plot_h - (cost_ct / max_cost_ct) * cost_plot_h;
-
-    let power_points = "";
-    for (let i = 0; i < samples.length; i++) {
-        const s = samples[i];
-        if (i === 0) {
-            power_points += `${x(s.t)},${y_power(s.w)}`;
-        } else {
-            power_points += ` ${x(s.t)},${y_power(samples[i - 1].w)} ${x(s.t)},${y_power(s.w)}`;
+        if (last != null) {
+            data.values[0].push(end_seconds);
+            data.values[1].push(last.w / 1000.0);
+            data.values[2].push(last.ct == 0x7FFFFFFF ? null : last.ct / 1000.0);
         }
+
+        return data;
     }
 
-    let price_points = "";
-    const filtered_samples = samples.filter(s => s.ct != 0x7FFFFFFF);
-    for (let i = 0; i < filtered_samples.length; i++) {
-        const s = filtered_samples[i];
-        if (i === 0) {
-            price_points += `${x(s.t)},${y_price(s.ct / 1000)}`;
-        } else {
-            price_points += ` ${x(s.t)},${y_price(filtered_samples[i - 1].ct / 1000)} ${x(s.t)},${y_price(s.ct / 1000)}`;
+    build_cost_data(samples: ChargeHistorySample[], start_seconds: number): UplotData {
+        const first_bin = Math.floor(start_seconds / ChargeHistoryGraph.COST_BIN_SECONDS) * ChargeHistoryGraph.COST_BIN_SECONDS;
+        const last_sample = samples[samples.length - 1];
+        const end_seconds = start_seconds + Math.max(1, last_sample.t) * 60;
+        const bin_count = Math.max(1, Math.ceil((end_seconds - first_bin) / ChargeHistoryGraph.COST_BIN_SECONDS));
+        const bins = new Array(bin_count).fill(0);
+
+        let previous_t = 0;
+        for (const s of samples) {
+            const interval_minutes = Math.max(0, s.t - previous_t);
+            const interval_start_seconds = start_seconds + previous_t * 60;
+            const interval_end_seconds = start_seconds + s.t * 60;
+            previous_t = s.t;
+
+            if (interval_minutes == 0 || s.ct == 0x7FFFFFFF) {
+                continue;
+            }
+
+            const price_ct_per_kwh = s.ct / 1000.0;
+            let cursor = interval_start_seconds;
+            while (cursor < interval_end_seconds) {
+                const bin_index = Math.floor((cursor - first_bin) / ChargeHistoryGraph.COST_BIN_SECONDS);
+                const bin_end = first_bin + (bin_index + 1) * ChargeHistoryGraph.COST_BIN_SECONDS;
+                const segment_end = Math.min(interval_end_seconds, bin_end);
+                const segment_minutes = Math.max(0, (segment_end - cursor) / 60.0);
+                const energy_kwh = (s.w / 1000.0) * (segment_minutes / 60.0);
+
+                if (bin_index >= 0 && bin_index < bins.length) {
+                    bins[bin_index] += energy_kwh * price_ct_per_kwh;
+                }
+
+                cursor = segment_end;
+            }
         }
+
+        const data: UplotData = {
+            keys: [null, "cost"],
+            names: [null, "Gesamtpreis je 30 min"],
+            values: [[], []],
+            paths: [null, UplotPath.Bar],
+            lines_vertical: [
+                {index: 0, text: "Start", color: [64, 64, 64, 0.10]},
+                {index: bin_count - 1, text: "Ende", color: [64, 64, 64, 0.10]},
+            ],
+        };
+
+        for (let i = 0; i < bins.length; ++i) {
+            data.values[0].push(first_bin + i * ChargeHistoryGraph.COST_BIN_SECONDS);
+            data.values[1].push(bins[i]);
+        }
+
+        return data;
     }
 
-    const grid_times_ms: number[] = [];
-    const grid_step_ms = 30 * 60 * 1000;
-    let first_grid_ms = Math.ceil(charge_start_ms / grid_step_ms) * grid_step_ms;
-    while (first_grid_ms <= charge_end_ms) {
-        grid_times_ms.push(first_grid_ms);
-        first_grid_ms += grid_step_ms;
+    update_uplot() {
+        if (this.power_price_ref.current == null || this.cost_ref.current == null) {
+            return;
+        }
+
+        const samples = this.props.samples ?? [];
+        if (samples.length == 0) {
+            this.power_price_ref.current.set_data({keys: [null], names: [null], values: [null]});
+            this.cost_ref.current.set_data({keys: [null], names: [null], values: [null]});
+            return;
+        }
+
+        const start_seconds = this.props.charge_start_timestamp_min * 60;
+        this.power_price_ref.current.set_data(this.build_power_price_data(samples, start_seconds));
+        this.cost_ref.current.set_data(this.build_cost_data(samples, start_seconds));
     }
 
-    const grid_lines = grid_times_ms.map(t_ms => {
-        const t_minutes = (t_ms - charge_start_ms) / (60 * 1000);
-        const x_pos = x(t_minutes);
-        const label = new Date(t_ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-        return {x_pos, label};
-    });
+    override render() {
+        const samples = this.props.samples ?? [];
+        if (samples.length == 0) {
+            return <div class="text-muted">Keine Verlaufsdaten vorhanden.</div>;
+        }
 
-    const start_label = new Date(charge_start_ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-    const end_label = new Date(charge_end_ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-
-    return <svg viewBox={`0 0 ${width} ${height}`} style="width: 100%; height: auto;">
-        {grid_lines.map(g => <line x1={g.x_pos} y1={top} x2={g.x_pos} y2={cost_plot_top + cost_plot_h} stroke="currentColor" opacity="0.15" />)}
-        {grid_lines.map(g => <text x={g.x_pos} y={height - 8} font-size="11" text-anchor="middle" fill="currentColor">{g.label}</text>)}
-
-        <line x1={left} y1={top} x2={left} y2={top + top_plot_h} stroke="currentColor" opacity="0.35" />
-        <line x1={left} y1={top + top_plot_h} x2={left + plot_w} y2={top + top_plot_h} stroke="currentColor" opacity="0.35" />
-        <line x1={left + plot_w} y1={top} x2={left + plot_w} y2={top + top_plot_h} stroke="currentColor" opacity="0.2" />
-
-        <line x1={left} y1={cost_plot_top} x2={left} y2={cost_plot_top + cost_plot_h} stroke="currentColor" opacity="0.35" />
-        <line x1={left} y1={cost_plot_top + cost_plot_h} x2={left + plot_w} y2={cost_plot_top + cost_plot_h} stroke="currentColor" opacity="0.35" />
-        <line x1={left + plot_w} y1={cost_plot_top} x2={left + plot_w} y2={cost_plot_top + cost_plot_h} stroke="currentColor" opacity="0.2" />
-
-        {cost_bars.map(b => {
-            const x0 = x(b.t_from);
-            const x1 = x(b.t_to);
-            const bar_w = Math.max(1, x1 - x0 - 1);
-            const bar_x = x0 + 0.5;
-            const bar_y = y_cost(b.cost_ct);
-            const bar_h = Math.max(1, cost_plot_top + cost_plot_h - bar_y);
-            return <rect x={bar_x} y={bar_y} width={bar_w} height={bar_h} fill="#fd7e14" opacity="0.45" />;
-        })}
-
-        <polyline points={power_points} fill="none" stroke="#0d6efd" stroke-width="2.5" />
-        {samples.map(s => <circle cx={x(s.t)} cy={y_power(s.w)} r="2.5" fill="#0d6efd" />)}
-        <polyline points={price_points} fill="none" stroke="#dc3545" stroke-width="2.5" />
-        {samples.filter(s => s.ct != 0x7FFFFFFF).map(s => <circle cx={x(s.t)} cy={y_price(s.ct / 1000)} r="2.5" fill="#dc3545" />)}
-
-        <text x={left} y={height - 24} font-size="11" fill="currentColor">{start_label}</text>
-        <text x={left + plot_w} y={height - 24} font-size="11" text-anchor="end" fill="currentColor">{end_label}</text>
-
-        <text x={8} y={top + 8} font-size="12" fill="#0d6efd">{util.toLocaleFixed(max_w / 1000, 1)} kW</text>
-        <text x={width - 6} y={top + 8} font-size="12" text-anchor="end" fill="#dc3545">{util.toLocaleFixed(max_ct, 2)} ct/kWh</text>
-        <text x={8} y={top + top_plot_h} font-size="12" fill="#0d6efd">0 kW</text>
-        <text x={width - 6} y={top + top_plot_h} font-size="12" text-anchor="end" fill="#dc3545">{util.toLocaleFixed(min_ct, 2)} ct/kWh</text>
-
-        <text x={8} y={cost_plot_top + 8} font-size="12" fill="#fd7e14">{util.toLocaleFixed(max_cost_ct, 2)} ct</text>
-        <text x={8} y={cost_plot_top + cost_plot_h} font-size="12" fill="#fd7e14">0 ct</text>
-
-        <circle cx={left + 12} cy={height - 26} r="4" fill="#0d6efd" />
-        <text x={left + 22} y={height - 22} font-size="12" fill="currentColor">kW</text>
-        <circle cx={left + 66} cy={height - 26} r="4" fill="#dc3545" />
-        <text x={left + 76} y={height - 22} font-size="12" fill="currentColor">ct/kWh</text>
-        <circle cx={left + 136} cy={height - 26} r="4" fill="#fd7e14" />
-        <text x={left + 146} y={height - 22} font-size="12" fill="currentColor">Kosten (ct)</text>
-    </svg>;
+        return <div style="position: relative;">
+            <UplotWrapperB
+                ref={this.power_price_ref}
+                class="charge-history-power-price-chart"
+                sub_page="charge_tracker"
+                color_cache_group="charge_tracker.history"
+                show
+                on_mount={() => this.update_uplot()}
+                sync={this.sync}
+                legend_time_label="Zeitbereich"
+                legend_time_with_minutes
+                aspect_ratio={2}
+                x_format={{hour: "2-digit", minute: "2-digit"}}
+                x_padding_factor={0}
+                x_include_date={false}
+                y_min={0}
+                y_unit="kW"
+                y_label="Leistung"
+                y_digits={2}
+                y2_enable
+                y2_unit="ct/kWh"
+                y2_label="Börsenpreis inkl. MwSt."
+                y2_digits={3}
+                y_sync_ref={this.cost_ref as any}
+                padding={[25, 15, null, null]}
+                height_min={360}
+            />
+            <div class="mt-2">
+                <UplotWrapperB
+                    ref={this.cost_ref}
+                    class="charge-history-cost-chart"
+                    sub_page="charge_tracker"
+                    color_cache_group="charge_tracker.history.cost"
+                    show
+                    on_mount={() => this.update_uplot()}
+                    sync={this.sync}
+                    legend_time_label="Zeitbereich"
+                    legend_time_with_minutes
+                    aspect_ratio={4}
+                    x_format={{hour: "2-digit", minute: "2-digit"}}
+                    x_padding_factor={0}
+                    x_include_date={false}
+                    y_min={0}
+                    y_unit="ct"
+                    y_label="Gesamtpreis"
+                    y_digits={3}
+                    y2_enable
+                    y2_unit="ct/kWh"
+                    y2_label="BÃ¶rsenpreis inkl. MwSt."
+                    y2_digits={3}
+                    y_sync_ref={this.power_price_ref as any}
+                    padding={[15, 15, null, null]}
+                    height_min={180}
+                />
+            </div>
+        </div>;
+    }
 }
 
 
@@ -430,9 +475,28 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
             // adding backend file/record indices to the WebSocket state. The
             // latter overflowed the WARP 1 initial WebSocket payload buffer
             // when repeated across the 30 visible charge records.
-            const response = await fetch(`/charge_tracker/charge_history?timestamp=${charge.timestamp_minutes}&duration=${charge.charge_duration}`);
-            if (!response.ok) {
-                throw new Error(await response.text());
+            const history_queries = [
+                `/charge_tracker/charge_history?timestamp=${charge.timestamp_minutes}&duration=${charge.charge_duration}`,
+            ];
+
+            // Compatibility fallback for older firmware that still keys dynamic
+            // history lookups by file/record indices instead of timestamp/duration.
+            const legacy_charge = charge as Charge & {file_index?: number; record_index?: number};
+            if (legacy_charge.file_index != null && legacy_charge.record_index != null) {
+                history_queries.push(`/charge_tracker/charge_history?file_index=${legacy_charge.file_index}&record_index=${legacy_charge.record_index}`);
+                history_queries.push(`/charge_tracker/charge_history?file=${legacy_charge.file_index}&record=${legacy_charge.record_index}`);
+            }
+
+            let response: Response | null = null;
+            for (const query of history_queries) {
+                response = await fetch(query);
+                if (response.ok) {
+                    break;
+                }
+            }
+
+            if (response == null || !response.ok) {
+                throw new Error(await response?.text() ?? "charge history request failed");
             }
 
             const history = await response.json() as ChargeHistoryResponse;
@@ -819,7 +883,7 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
 
         return (
             <SubPage name="charge_tracker">
-                <Modal size="lg" centered show={state.history_modal_charge != null} onHide={() => this.setState({history_modal_charge: null})}>
+                <Modal size="xl" centered show={state.history_modal_charge != null} onHide={() => this.setState({history_modal_charge: null})}>
                     <Modal.Header closeButton>
                         <Modal.Title>{__("charge_tracker.content.history_title")}</Modal.Title>
                     </Modal.Header>

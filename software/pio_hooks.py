@@ -825,14 +825,26 @@ def get_generated_files_index():
 
     try:
         with open('generated_files_v2', 'r', encoding='utf-8') as f:
-            for entry in f.read().replace('\\', '/').strip().split('\n'):
+            content = f.read().replace('\\', '/')
+            for entry in content.splitlines():
+                entry = entry.strip()
+                if entry == '':
+                    continue
+
                 parts = entry.split(' ', 1)
+                if len(parts) != 2 or parts[0] == '' or parts[1] == '':
+                    print(f"Warning: Ignoring malformed generated_files_v2 entry: {entry!r}", file=sys.stderr)
+                    continue
 
                 generated_files[parts[1]] = parts[0]
     except FileNotFoundError:
         try:
             with open('generated_files', 'r', encoding='utf-8') as f:
-                for generated_file in f.read().replace('\\', '/').strip().split('\n'):
+                content = f.read().replace('\\', '/')
+                for generated_file in content.splitlines():
+                    generated_file = generated_file.strip()
+                    if generated_file == '':
+                        continue
                     generated_files[generated_file] = None
         except FileNotFoundError:
             pass

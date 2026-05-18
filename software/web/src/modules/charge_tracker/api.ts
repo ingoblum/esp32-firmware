@@ -12,6 +12,11 @@ interface Charge {
     charge_duration: number;
     user_id: number;
     energy_charged: number;
+    // Legacy helper fields may still be present on older firmware builds.
+    // Keep them optional so a newer UI can stay backward compatible without
+    // increasing payload size requirements on current firmware.
+    file_index?: number;
+    record_index?: number;
     // Cent amount calculated from Day Ahead Prices. 0xFFFFFFFF means that this
     // record has no dynamic price data and the frontend should use the
     // configured fixed price fallback instead.

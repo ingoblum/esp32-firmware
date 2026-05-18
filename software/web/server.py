@@ -73,7 +73,12 @@ def index():
 @app.route('/<path:path>', methods=['GET', 'PUT', 'POST'])
 def forward_html(path):
     try:
-        with urlopen(Request(f'http://{host}/{path}', data=request.data, method=request.method)) as f:
+        query = request.query_string.decode('utf-8')
+        url = f'http://{host}/{path}'
+        if query:
+            url += f'?{query}'
+
+        with urlopen(Request(url, data=request.data, method=request.method)) as f:
             # Exclude Transfer-Encoding: chunked header.  The chunked response is already reassembled.
             return Response(f.read(), headers={x: f.headers[x] for x in f.headers if x != "Transfer-Encoding"})
     except HTTPError as e:

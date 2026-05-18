@@ -183,6 +183,7 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
                     incrs: [
                         60,
                         60 * 2,
+                        60 * 30,
                         3600,
                         3600 * 2,
                         3600 * 4,
