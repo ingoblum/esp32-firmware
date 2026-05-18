@@ -162,30 +162,59 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
     </ListGroupItem>
 }
 
-function ChargeHistoryGraph(props: {samples: ChargeHistorySample[]}) {
+function ChargeHistoryGraph(props: {samples: ChargeHistorySample[], charge_start_timestamp_min: number}) {
     const samples = props.samples ?? [];
     if (samples.length == 0) {
         return <div class="text-muted">Keine Verlaufsdaten vorhanden.</div>;
     }
 
     const width = 720;
-    const height = 260;
+    const height = 330;
     const left = 48;
     const right = 54;
-    const top = 18;
-    const bottom = 34;
+    const top = 14;
+    const bottom = 46;
     const plot_w = width - left - right;
-    const plot_h = height - top - bottom;
+    const top_plot_h = 172;
+    const plot_gap = 18;
+    const cost_plot_top = top + top_plot_h + plot_gap;
+    const cost_plot_h = height - bottom - cost_plot_top;
 
     const max_t = Math.max(...samples.map(s => s.t), 1);
     const max_w = Math.max(...samples.map(s => s.w), 1);
     const valid_prices = samples.filter(s => s.ct != 0x7FFFFFFF).map(s => s.ct / 1000);
     const min_ct = valid_prices.length == 0 ? 0 : Math.min(...valid_prices);
     const max_ct = valid_prices.length == 0 ? 1 : Math.max(...valid_prices, min_ct + 1);
+    const charge_start_ms = props.charge_start_timestamp_min * 60 * 1000;
+    const charge_end_ms = charge_start_ms + max_t * 60 * 1000;
 
     const x = (t: number) => left + (t / max_t) * plot_w;
-    const y_power = (w: number) => top + plot_h - (w / max_w) * plot_h;
-    const y_price = (ct: number) => top + plot_h - ((ct - min_ct) / (max_ct - min_ct)) * plot_h;
+    const y_power = (w: number) => top + top_plot_h - (w / max_w) * top_plot_h;
+    const y_price = (ct: number) => top + top_plot_h - ((ct - min_ct) / (max_ct - min_ct)) * top_plot_h;
+
+    type CostBar = {
+        t_from: number;
+        t_to: number;
+        cost_ct: number;
+    };
+    const cost_bars: CostBar[] = [];
+    let previous_t = 0;
+    for (const s of samples) {
+        const interval_minutes = Math.max(0, s.t - previous_t);
+        previous_t = s.t;
+
+        if (interval_minutes == 0 || s.ct == 0x7FFFFFFF) {
+            continue;
+        }
+
+        const energy_kwh = (s.w / 1000.0) * (interval_minutes / 60.0);
+        const price_ct_per_kwh = s.ct / 1000.0;
+        const cost_ct = energy_kwh * price_ct_per_kwh;
+        cost_bars.push({t_from: s.t - interval_minutes, t_to: s.t, cost_ct});
+    }
+
+    const max_cost_ct = Math.max(...cost_bars.map(b => b.cost_ct), 0.01);
+    const y_cost = (cost_ct: number) => cost_plot_top + cost_plot_h - (cost_ct / max_cost_ct) * cost_plot_h;
 
     let power_points = "";
     for (let i = 0; i < samples.length; i++) {
@@ -208,24 +237,68 @@ function ChargeHistoryGraph(props: {samples: ChargeHistorySample[]}) {
         }
     }
 
+    const grid_times_ms: number[] = [];
+    const grid_step_ms = 30 * 60 * 1000;
+    let first_grid_ms = Math.ceil(charge_start_ms / grid_step_ms) * grid_step_ms;
+    while (first_grid_ms <= charge_end_ms) {
+        grid_times_ms.push(first_grid_ms);
+        first_grid_ms += grid_step_ms;
+    }
+
+    const grid_lines = grid_times_ms.map(t_ms => {
+        const t_minutes = (t_ms - charge_start_ms) / (60 * 1000);
+        const x_pos = x(t_minutes);
+        const label = new Date(t_ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+        return {x_pos, label};
+    });
+
+    const start_label = new Date(charge_start_ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    const end_label = new Date(charge_end_ms).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+
     return <svg viewBox={`0 0 ${width} ${height}`} style="width: 100%; height: auto;">
-        <line x1={left} y1={top} x2={left} y2={top + plot_h} stroke="currentColor" opacity="0.35" />
-        <line x1={left} y1={top + plot_h} x2={left + plot_w} y2={top + plot_h} stroke="currentColor" opacity="0.35" />
-        <line x1={left + plot_w} y1={top} x2={left + plot_w} y2={top + plot_h} stroke="currentColor" opacity="0.2" />
+        {grid_lines.map(g => <line x1={g.x_pos} y1={top} x2={g.x_pos} y2={cost_plot_top + cost_plot_h} stroke="currentColor" opacity="0.15" />)}
+        {grid_lines.map(g => <text x={g.x_pos} y={height - 8} font-size="11" text-anchor="middle" fill="currentColor">{g.label}</text>)}
+
+        <line x1={left} y1={top} x2={left} y2={top + top_plot_h} stroke="currentColor" opacity="0.35" />
+        <line x1={left} y1={top + top_plot_h} x2={left + plot_w} y2={top + top_plot_h} stroke="currentColor" opacity="0.35" />
+        <line x1={left + plot_w} y1={top} x2={left + plot_w} y2={top + top_plot_h} stroke="currentColor" opacity="0.2" />
+
+        <line x1={left} y1={cost_plot_top} x2={left} y2={cost_plot_top + cost_plot_h} stroke="currentColor" opacity="0.35" />
+        <line x1={left} y1={cost_plot_top + cost_plot_h} x2={left + plot_w} y2={cost_plot_top + cost_plot_h} stroke="currentColor" opacity="0.35" />
+        <line x1={left + plot_w} y1={cost_plot_top} x2={left + plot_w} y2={cost_plot_top + cost_plot_h} stroke="currentColor" opacity="0.2" />
+
+        {cost_bars.map(b => {
+            const x0 = x(b.t_from);
+            const x1 = x(b.t_to);
+            const bar_w = Math.max(1, x1 - x0 - 1);
+            const bar_x = x0 + 0.5;
+            const bar_y = y_cost(b.cost_ct);
+            const bar_h = Math.max(1, cost_plot_top + cost_plot_h - bar_y);
+            return <rect x={bar_x} y={bar_y} width={bar_w} height={bar_h} fill="#fd7e14" opacity="0.45" />;
+        })}
+
         <polyline points={power_points} fill="none" stroke="#0d6efd" stroke-width="2.5" />
         {samples.map(s => <circle cx={x(s.t)} cy={y_power(s.w)} r="2.5" fill="#0d6efd" />)}
         <polyline points={price_points} fill="none" stroke="#dc3545" stroke-width="2.5" />
         {samples.filter(s => s.ct != 0x7FFFFFFF).map(s => <circle cx={x(s.t)} cy={y_price(s.ct / 1000)} r="2.5" fill="#dc3545" />)}
-        <text x={left} y={height - 8} font-size="12" fill="currentColor">0 min</text>
-        <text x={left + plot_w} y={height - 8} font-size="12" text-anchor="end" fill="currentColor">{max_t} min</text>
+
+        <text x={left} y={height - 24} font-size="11" fill="currentColor">{start_label}</text>
+        <text x={left + plot_w} y={height - 24} font-size="11" text-anchor="end" fill="currentColor">{end_label}</text>
+
         <text x={8} y={top + 8} font-size="12" fill="#0d6efd">{util.toLocaleFixed(max_w / 1000, 1)} kW</text>
         <text x={width - 6} y={top + 8} font-size="12" text-anchor="end" fill="#dc3545">{util.toLocaleFixed(max_ct, 2)} ct/kWh</text>
-        <text x={8} y={top + plot_h} font-size="12" fill="#0d6efd">0 kW</text>
-        <text x={width - 6} y={top + plot_h} font-size="12" text-anchor="end" fill="#dc3545">{util.toLocaleFixed(min_ct, 2)} ct/kWh</text>
-        <circle cx={left + 12} cy={top + plot_h + 22} r="4" fill="#0d6efd" />
-        <text x={left + 22} y={top + plot_h + 26} font-size="12" fill="currentColor">kW</text>
-        <circle cx={left + 66} cy={top + plot_h + 22} r="4" fill="#dc3545" />
-        <text x={left + 76} y={top + plot_h + 26} font-size="12" fill="currentColor">ct/kWh</text>
+        <text x={8} y={top + top_plot_h} font-size="12" fill="#0d6efd">0 kW</text>
+        <text x={width - 6} y={top + top_plot_h} font-size="12" text-anchor="end" fill="#dc3545">{util.toLocaleFixed(min_ct, 2)} ct/kWh</text>
+
+        <text x={8} y={cost_plot_top + 8} font-size="12" fill="#fd7e14">{util.toLocaleFixed(max_cost_ct, 2)} ct</text>
+        <text x={8} y={cost_plot_top + cost_plot_h} font-size="12" fill="#fd7e14">0 ct</text>
+
+        <circle cx={left + 12} cy={height - 26} r="4" fill="#0d6efd" />
+        <text x={left + 22} y={height - 22} font-size="12" fill="currentColor">kW</text>
+        <circle cx={left + 66} cy={height - 26} r="4" fill="#dc3545" />
+        <text x={left + 76} y={height - 22} font-size="12" fill="currentColor">ct/kWh</text>
+        <circle cx={left + 136} cy={height - 26} r="4" fill="#fd7e14" />
+        <text x={left + 146} y={height - 22} font-size="12" fill="currentColor">Kosten (ct)</text>
     </svg>;
 }
 
@@ -754,7 +827,7 @@ export class ChargeTracker extends ConfigComponent<'charge_tracker/config', {sta
                         <FormRow label={__("charge_tracker.content.history_nfc_tag")}>
                             <InputText value={history_modal_tag_text}/>
                         </FormRow>
-                        <ChargeHistoryGraph samples={state.history_modal_samples}/>
+                        <ChargeHistoryGraph samples={state.history_modal_samples} charge_start_timestamp_min={state.history_modal_charge?.timestamp_minutes ?? 0}/>
                     </Modal.Body>
                 </Modal>
 
