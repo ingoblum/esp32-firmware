@@ -62,6 +62,7 @@ public:
     #define TRIGGER_CHARGE_START 1
     #define TRIGGER_CHARGE_STOP 2
     bool trigger_charge_action(uint8_t user_id, uint8_t auth_type, Config::ConfVariant auth_info, int action, micros_t deadtime_post_stop, micros_t deadtime_post_start);
+    bool resolve_charge_action_user(ConfigRoot &command, uint8_t *resolved_user_id, String &errmsg);
 
     void remove_username_file();
 

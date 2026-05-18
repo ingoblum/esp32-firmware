@@ -40,11 +40,11 @@ export interface http_auth {
 }
 
 export interface charge_start {
-    user_id: number;
-    username: string;
+    user_id?: number;
+    username?: string;
 }
 
 export interface charge_stop {
-    user_id: number;
-    username: string;
+    user_id?: number;
+    username?: string;
 }

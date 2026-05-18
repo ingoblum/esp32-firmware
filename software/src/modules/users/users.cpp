@@ -320,12 +320,14 @@ void Users::pre_setup()
     }};
 
     charge_start = ConfigRoot{Config::Object({
-        {"user_id", Config::Uint8(0)},
+        // 256 is an out-of-range marker that lets us detect "missing user_id"
+        // when callers choose username-only commands.
+        {"user_id", Config::Uint(256, 0, 256)},
         {"username", Config::Str("", 0, USERNAME_LENGTH)}
     })};
 
     charge_stop = ConfigRoot{Config::Object({
-        {"user_id", Config::Uint8(0)},
+        {"user_id", Config::Uint(256, 0, 256)},
         {"username", Config::Str("", 0, USERNAME_LENGTH)}
     })};
 }
@@ -550,6 +552,37 @@ bool Users::is_user_configured(uint8_t user_id)
     return false;
 }
 
+bool Users::resolve_charge_action_user(ConfigRoot &command, uint8_t *resolved_user_id, String &errmsg)
+{
+    const uint32_t user_id_cfg = command.get("user_id")->asUint();
+    const String &username = command.get("username")->asString();
+    const bool have_user_id = user_id_cfg < 256;
+    const bool have_username = !username.isEmpty();
+
+    if (!have_user_id && !have_username) {
+        errmsg = "Either user_id or username must be provided.";
+        return false;
+    }
+
+    if (have_user_id) {
+        *resolved_user_id = static_cast<uint8_t>(user_id_cfg);
+    }
+
+    if (have_username) {
+        for (size_t i = 0; i < config.get("users")->count(); ++i) {
+            if (config.get("users")->get(i)->get("username")->asString() == username) {
+                *resolved_user_id = config.get("users")->get(i)->get("id")->asUint();
+                return true;
+            }
+        }
+
+        errmsg = "User with username '" + username + "' not found.";
+        return false;
+    }
+
+    return true;
+}
+
 #if MODULE_EVSE_LED_AVAILABLE()
 static void check_waiting_for_start()
 {
@@ -689,23 +722,10 @@ void Users::register_urls()
         API::writeConfig("users/config", &config);
     }, false);
 
-    api.addCommand("users/charge_start", &charge_start, {"user_id"}, [this](Language /*language*/, String &errmsg) {
-        uint8_t user_id = charge_start.get("user_id")->asUint();
-        const String &username = charge_start.get("username")->asString();
-
-        if (!username.isEmpty()) {
-            bool found = false;
-            for (size_t i = 0; i < config.get("users")->count(); ++i) {
-                if (config.get("users")->get(i)->get("username")->asString() == username) {
-                    user_id = config.get("users")->get(i)->get("id")->asUint();
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                errmsg = "User with username '" + username + "' not found.";
-                return;
-            }
+    api.addCommand("users/charge_start", &charge_start, {}, [this](Language /*language*/, String &errmsg) {
+        uint8_t user_id = 0;
+        if (!this->resolve_charge_action_user(charge_start, &user_id, errmsg)) {
+            return;
         }
 
         if (!this->trigger_charge_action(user_id, USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_START, 0_s, 0_s)) {
@@ -713,23 +733,10 @@ void Users::register_urls()
         }
     }, true);
 
-    api.addCommand("users/charge_stop", &charge_stop, {"user_id"}, [this](Language /*language*/, String &errmsg) {
-        uint8_t user_id = charge_stop.get("user_id")->asUint();
-        const String &username = charge_stop.get("username")->asString();
-
-        if (!username.isEmpty()) {
-            bool found = false;
-            for (size_t i = 0; i < config.get("users")->count(); ++i) {
-                if (config.get("users")->get(i)->get("username")->asString() == username) {
-                    user_id = config.get("users")->get(i)->get("id")->asUint();
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                errmsg = "User with username '" + username + "' not found.";
-                return;
-            }
+    api.addCommand("users/charge_stop", &charge_stop, {}, [this](Language /*language*/, String &errmsg) {
+        uint8_t user_id = 0;
+        if (!this->resolve_charge_action_user(charge_stop, &user_id, errmsg)) {
+            return;
         }
 
         this->trigger_charge_action(user_id, USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_STOP, 0_s, 0_s);
