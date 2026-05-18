@@ -403,7 +403,7 @@ bool ChargeTracker::startCharge(uint32_t timestamp_minutes, float meter_start, u
     // If the regular charge tracking rejects the start, no dynamic side data is
     // created either.
     startDynamicCostTracking(meter_start);
-    resetDynamicHistoryTracking(meter_start);
+    resetDynamicHistoryTracking(meter_start, timestamp_minutes);
     return true;
 }
 
@@ -765,12 +765,13 @@ void ChargeTracker::sampleDynamicCost(float kwh_abs)
 #endif
 }
 
-void ChargeTracker::resetDynamicHistoryTracking(float kwh_start)
+void ChargeTracker::resetDynamicHistoryTracking(float kwh_start, uint32_t start_timestamp_minutes)
 {
     // History samples are derived from the same absolute meter that the charge
     // tracker uses for start/end energy. Keeping separate baselines lets the
     // cost integrator run every 30s while the persisted graph stays at 5min.
     dynamic_history_start_ms = millis();
+    dynamic_history_start_timestamp_min = start_timestamp_minutes;
     dynamic_history_last_ms = dynamic_history_start_ms;
     dynamic_history_last_kwh = kwh_start;
 }
@@ -778,13 +779,7 @@ void ChargeTracker::resetDynamicHistoryTracking(float kwh_start)
 void ChargeTracker::sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh_milli, bool force)
 {
     const uint32_t now_ms = millis();
-    const uint32_t interval_ms = now_ms - dynamic_history_last_ms;
-
-    if (!force && interval_ms < CHARGE_DYNAMIC_HISTORY_INTERVAL_MS) {
-        return;
-    }
-
-    if (interval_ms == 0 || std::isnan(dynamic_history_last_kwh) || std::isnan(kwh_abs) || kwh_abs < dynamic_history_last_kwh) {
+    if (dynamic_history_last_ms == 0 || std::isnan(dynamic_history_last_kwh) || std::isnan(kwh_abs)) {
         if (!std::isnan(kwh_abs)) {
             dynamic_history_last_kwh = kwh_abs;
             dynamic_history_last_ms = now_ms;
@@ -792,20 +787,71 @@ void ChargeTracker::sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh
         return;
     }
 
-    const float delta_kwh = kwh_abs - dynamic_history_last_kwh;
-    const float interval_hours = interval_ms / 3600000.0f;
-    const uint32_t power_w = static_cast<uint32_t>(std::round(delta_kwh / interval_hours * 1000.0f));
-    const uint32_t offset_minutes = (now_ms - dynamic_history_start_ms + 30000UL) / 60000UL;
+    const uint32_t interval_ms = now_ms - dynamic_history_last_ms;
+    if (interval_ms == 0 || kwh_abs < dynamic_history_last_kwh) {
+        if (!std::isnan(kwh_abs)) {
+            dynamic_history_last_kwh = kwh_abs;
+            dynamic_history_last_ms = now_ms;
+        }
+        return;
+    }
 
-    ChargeDynamicHistorySample sample;
-    sample.offset_minutes = static_cast<uint16_t>(std::min<uint32_t>(offset_minutes, UINT16_MAX));
-    sample.power_w = static_cast<uint16_t>(std::min<uint32_t>(power_w, UINT16_MAX));
-    sample.price_ct_per_kwh_milli = price_ct_per_kwh_milli;
+    // Keep samples aligned to absolute 5-minute calendar boundaries. This
+    // avoids frontend-side interpolation for quarter-hour cost bins while still
+    // keeping a partial first/last interval.
+    static constexpr uint64_t boundary_period_ms = CHARGE_DYNAMIC_HISTORY_INTERVAL_MS;
+    const uint64_t start_epoch_like_ms = static_cast<uint64_t>(dynamic_history_start_timestamp_min) * 60000ULL;
+    const float interval_start_kwh = dynamic_history_last_kwh;
+    const uint64_t last_offset_ms = static_cast<uint64_t>(dynamic_history_last_ms - dynamic_history_start_ms);
+    const uint64_t now_offset_ms = static_cast<uint64_t>(now_ms - dynamic_history_start_ms);
+    const uint64_t last_epoch_like_ms = start_epoch_like_ms + last_offset_ms;
+    const uint64_t now_epoch_like_ms = start_epoch_like_ms + now_offset_ms;
 
-    writeDynamicHistorySample(dynamic_history_file_index, dynamic_history_record_index, sample);
+    uint64_t next_boundary_epoch_like_ms = ((last_epoch_like_ms / boundary_period_ms) + 1ULL) * boundary_period_ms;
+    bool wrote_sample = false;
 
-    dynamic_history_last_kwh = kwh_abs;
-    dynamic_history_last_ms = now_ms;
+    auto write_segment_sample = [&](uint64_t end_offset_ms, float end_kwh) {
+        const uint64_t segment_start_offset_ms = static_cast<uint64_t>(dynamic_history_last_ms - dynamic_history_start_ms);
+        const uint32_t segment_ms = static_cast<uint32_t>(end_offset_ms - segment_start_offset_ms);
+        if (segment_ms == 0 || end_kwh < dynamic_history_last_kwh) {
+            return;
+        }
+
+        const float delta_kwh = end_kwh - dynamic_history_last_kwh;
+        const float interval_hours = segment_ms / 3600000.0f;
+        const uint32_t power_w = interval_hours > 0.0f
+            ? static_cast<uint32_t>(std::round(delta_kwh / interval_hours * 1000.0f))
+            : 0;
+
+        ChargeDynamicHistorySample sample;
+        sample.offset_minutes = static_cast<uint16_t>(std::min<uint64_t>((end_offset_ms + 30000ULL) / 60000ULL, UINT16_MAX));
+        sample.power_w = static_cast<uint16_t>(std::min<uint32_t>(power_w, UINT16_MAX));
+        sample.price_ct_per_kwh_milli = price_ct_per_kwh_milli;
+        writeDynamicHistorySample(dynamic_history_file_index, dynamic_history_record_index, sample);
+
+        dynamic_history_last_ms = dynamic_history_start_ms + static_cast<uint32_t>(end_offset_ms);
+        dynamic_history_last_kwh = end_kwh;
+        wrote_sample = true;
+    };
+
+    while (next_boundary_epoch_like_ms <= now_epoch_like_ms) {
+        const uint64_t end_offset_ms = next_boundary_epoch_like_ms - start_epoch_like_ms;
+        const float ratio = static_cast<float>(end_offset_ms - last_offset_ms) / static_cast<float>(now_offset_ms - last_offset_ms);
+        const float boundary_kwh = interval_start_kwh + (kwh_abs - interval_start_kwh) * std::max(0.0f, std::min(1.0f, ratio));
+        write_segment_sample(end_offset_ms, boundary_kwh);
+        next_boundary_epoch_like_ms += boundary_period_ms;
+    }
+
+    if (force) {
+        write_segment_sample(now_offset_ms, kwh_abs);
+    }
+
+    if (!wrote_sample && !force) {
+        // No boundary crossed yet. Keep the existing sample anchor so the next
+        // call can still span the whole interval to the first boundary.
+        return;
+    }
+
 }
 
 uint32_t ChargeTracker::finishDynamicCostTracking(float kwh_end)

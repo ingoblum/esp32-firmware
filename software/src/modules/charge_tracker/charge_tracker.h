@@ -115,7 +115,7 @@ private:
     void sampleDynamicCost(float kwh_abs = NAN);
     uint32_t finishDynamicCostTracking(float kwh_end);
     void sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh_milli, bool force);
-    void resetDynamicHistoryTracking(float kwh_start);
+    void resetDynamicHistoryTracking(float kwh_start, uint32_t start_timestamp_minutes);
     void writeDynamicHistorySample(uint32_t file_index, uint32_t record_index, const ChargeDynamicHistorySample &sample);
     void writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent, uint8_t tag_type, const char *tag_id);
     void getCurrentNfcTag(uint8_t *tag_type, char tag_id[CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH]);
@@ -135,6 +135,7 @@ private:
     uint32_t dynamic_history_file_index = 0;
     uint32_t dynamic_history_record_index = 0;
     uint32_t dynamic_history_start_ms = 0;
+    uint32_t dynamic_history_start_timestamp_min = 0;
     uint32_t dynamic_history_last_ms = 0;
     float dynamic_history_last_kwh = NAN;
 };
