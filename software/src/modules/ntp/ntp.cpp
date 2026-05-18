@@ -28,15 +28,20 @@
 
 #include "gcc_warnings.h"
 
-extern "C" void sntp_sync_time(struct timeval *tv)
+void ntp_sync_cb(struct timeval *tv)
 {
 #if MODULE_RTC_AVAILABLE()
     rtc.push_system_time(*tv, Rtc::Quality::High);
-#elif
-    settimeofday(&time, NULL);
+#else
+    settimeofday(tv, NULL);
 #endif
 
     ntp.time_synced_NTPThread();
+}
+
+extern "C" void sntp_sync_time(struct timeval *tv)
+{
+    ntp_sync_cb(tv);
 }
 
 void NTP::pre_setup()
@@ -123,20 +128,22 @@ void NTP::apply_config()
 
     const bool set_servers_from_dhcp = config.get("use_dhcp")->asBool();
 
-    // As we use our own sntp_sync_time function, we do not need to register the cb function.
-    // sntp_set_time_sync_notification_cb(ntp_sync_cb);
+    esp_sntp_set_time_sync_notification_cb(ntp_sync_cb);
 
     // Getting SNTP servers from DHCP should be enabled before setting up Ethernet or WiFi.
     esp_sntp_servermode_dhcp(set_servers_from_dhcp);
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
 
-    // Always set first two NTP server slots and don't leave any room for
-    // servers received via DHCP. If NTP via DHCP is enabled and NTP
-    // servers are received via DHCP, all previously set servers are removed.
-    // Always set both servers, even when only one is configured, as the SNTP
-    // client will query all servers round-robin, including unset ones.
-    esp_sntp_setservername(0, ntp_server1.isEmpty() ? ntp_server2.c_str() : ntp_server1.c_str());
-    esp_sntp_setservername(1, ntp_server2.isEmpty() ? ntp_server1.c_str() : ntp_server2.c_str());
+    if (set_servers_from_dhcp) {
+        // If DHCP is enabled, leave slot 0 for the DHCP-provided server.
+        // Manual servers are placed in slots 1 and 2.
+        esp_sntp_setservername(1, ntp_server1.isEmpty() ? ntp_server2.c_str() : ntp_server1.c_str());
+        esp_sntp_setservername(2, ntp_server2.isEmpty() ? ntp_server1.c_str() : ntp_server2.c_str());
+    } else {
+        // If DHCP is disabled, use slots 0 and 1 for manual servers.
+        esp_sntp_setservername(0, ntp_server1.isEmpty() ? ntp_server2.c_str() : ntp_server1.c_str());
+        esp_sntp_setservername(1, ntp_server2.isEmpty() ? ntp_server1.c_str() : ntp_server2.c_str());
+    }
 
 #if MODULE_NETWORK_AVAILABLE()
     // During initial boot, the network is not yet connected.
