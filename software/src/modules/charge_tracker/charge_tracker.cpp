@@ -119,6 +119,78 @@ String chargeDynamicHistoryFilename(uint32_t file_index, uint32_t record_index)
     return String(buf, sw.getLength());
 }
 
+static bool parseUnsignedSuffix(const String &s, int begin, int end, uint32_t *value, bool allow_zero = false)
+{
+    if (begin >= end) {
+        return false;
+    }
+
+    uint32_t parsed = 0;
+    for (int i = begin; i < end; ++i) {
+        const char c = s.charAt(i);
+        if (c < '0' || c > '9') {
+            return false;
+        }
+
+        parsed = parsed * 10 + static_cast<uint32_t>(c - '0');
+    }
+
+    if (parsed == 0 && !allow_zero) {
+        return false;
+    }
+
+    *value = parsed;
+    return true;
+}
+
+static bool parseChargeRecordFilename(const String &name, uint32_t *file_index)
+{
+    static constexpr const char *prefix = "charge-record-";
+    static constexpr int prefix_len = 14;
+    static constexpr const char *suffix = ".bin";
+    static constexpr int suffix_len = 4;
+
+    if (!name.startsWith(prefix) || !name.endsWith(suffix)) {
+        return false;
+    }
+
+    return parseUnsignedSuffix(name, prefix_len, name.length() - suffix_len, file_index);
+}
+
+static bool parseChargeSupplementaryRecordFilename(const String &name, uint32_t *file_index)
+{
+    static constexpr const char *prefix = "charge-record-";
+    static constexpr int prefix_len = 14;
+    static constexpr const char *suffix = "-supplementary.bin";
+    static constexpr int suffix_len = 18;
+
+    if (!name.startsWith(prefix) || !name.endsWith(suffix)) {
+        return false;
+    }
+
+    return parseUnsignedSuffix(name, prefix_len, name.length() - suffix_len, file_index);
+}
+
+static bool parseChargeDynamicHistoryFilename(const String &name, uint32_t *file_index, uint32_t *record_index)
+{
+    static constexpr const char *prefix = "charge-record-";
+    static constexpr int prefix_len = 14;
+    static constexpr const char *suffix = "-history.bin";
+    static constexpr int suffix_len = 12;
+
+    if (!name.startsWith(prefix) || !name.endsWith(suffix)) {
+        return false;
+    }
+
+    const int record_separator = name.indexOf('-', prefix_len);
+    if (record_separator < 0) {
+        return false;
+    }
+
+    return parseUnsignedSuffix(name, prefix_len, record_separator, file_index)
+        && parseUnsignedSuffix(name, record_separator + 1, name.length() - suffix_len, record_index, true);
+}
+
 #if MODULE_REMOTE_ACCESS_AVAILABLE()
 static bool wants_send(uint32_t current_time_min, uint32_t last_send_time_min)
 {
@@ -489,6 +561,38 @@ void ChargeTracker::removeOldRecords()
     }
 }
 
+void ChargeTracker::removeOrphanedRecordFiles(File &folder, uint32_t first, uint32_t last, bool have_charge_records)
+{
+    folder.rewindDirectory();
+    while (File f = folder.openNextFile()) {
+        const String name{f.name()};
+        uint32_t file_index = 0;
+        uint32_t record_index = 0;
+        bool remove_file = false;
+
+        if (parseChargeSupplementaryRecordFilename(name, &file_index)) {
+            remove_file = !have_charge_records || file_index < first || file_index > last;
+        } else if (parseChargeDynamicHistoryFilename(name, &file_index, &record_index)) {
+            if (!have_charge_records || file_index < first || file_index > last) {
+                remove_file = true;
+            } else {
+                const size_t record_file_size = file_size(LittleFS, chargeRecordFilename(file_index));
+                size_t record_count = record_file_size / CHARGE_RECORD_SIZE;
+                if ((record_file_size % CHARGE_RECORD_SIZE) == sizeof(ChargeStart)) {
+                    ++record_count;
+                }
+
+                remove_file = record_index >= record_count;
+            }
+        }
+
+        if (remove_file) {
+            logger.printfln("Removing orphaned charge record sidecar file: %s", name.c_str());
+            LittleFS.remove(String(CHARGE_RECORD_FOLDER) + "/" + name);
+        }
+    }
+}
+
 bool ChargeTracker::setupRecords()
 {
     if (!LittleFS.mkdir(CHARGE_RECORD_FOLDER)) { // mkdir also returns true if the directory already exists and is a directory.
@@ -527,13 +631,8 @@ bool ChargeTracker::setupRecords()
             continue;
         }
 
-        if (!name.startsWith("charge-record-") || !name.endsWith(".bin")) {
-            logger.printfln("Unexpected file %s in charge record folder", name.c_str());
-            continue;
-        }
-
-        long suffix = name.substring(14, name.length() - 4).toInt();
-        if (suffix == 0) {
+        uint32_t suffix = 0;
+        if (!parseChargeRecordFilename(name, &suffix)) {
             logger.printfln("Unexpected file %s in charge record folder", name.c_str());
             continue;
         }
@@ -550,6 +649,7 @@ bool ChargeTracker::setupRecords()
     if (found_blob_counter == 0) {
         this->first_charge_record = 1;
         this->last_charge_record = 1;
+        removeOrphanedRecordFiles(folder, this->first_charge_record, this->last_charge_record, false);
         return true;
     }
 
@@ -584,33 +684,7 @@ bool ChargeTracker::setupRecords()
     this->first_charge_record = first;
     this->last_charge_record = last;
 
-    // GC pass: Remove orphaned sidecar files that don't belong to an active charge record.
-    folder.rewindDirectory();
-    while (File f = folder.openNextFile()) {
-        String name{f.name()};
-        uint32_t file_index = 0;
-        bool is_record_file = false;
-
-        if (name.endsWith("-supplementary.bin")) {
-            file_index = name.substring(14, name.length() - 18).toInt();
-            is_record_file = true;
-        } else if (name.endsWith("-history.bin")) {
-            // format: charge-record-<file_index>-<record_index>-history.bin
-            int second_dash = name.indexOf('-', 14);
-            if (second_dash != -1) {
-                file_index = name.substring(14, second_dash).toInt();
-                is_record_file = true;
-            }
-        } else if (name.startsWith("charge-record-") && name.endsWith(".bin")) {
-            file_index = name.substring(14, name.length() - 4).toInt();
-            is_record_file = true;
-        }
-
-        if (is_record_file && (file_index < first || file_index > last)) {
-            logger.printfln("Removing orphaned or out-of-range charge record file: %s", name.c_str());
-            LittleFS.remove(String(CHARGE_RECORD_FOLDER) + "/" + name);
-        }
-    }
+    removeOrphanedRecordFiles(folder, first, last, true);
 
     upgradeSupplementaryRecords();
 

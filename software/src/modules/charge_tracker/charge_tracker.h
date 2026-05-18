@@ -105,6 +105,7 @@ public:
 private:
     bool repair_last(float);
     void repair_charges();
+    void removeOrphanedRecordFiles(File &folder, uint32_t first, uint32_t last, bool have_charge_records);
 
     // Dynamic-price accounting is kept in memory while a charge is active. Each
     // sample multiplies the newly charged kWh since the previous sample with
