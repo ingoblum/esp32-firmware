@@ -725,7 +725,7 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
 
         if (this.data.paths) {
             if (this.data.paths[i] == UplotPath.Bar) {
-                paths = uPlot.paths.bars({size: [0.4, 100], align: this.data.stacked !== undefined && this.data.stacked[i] ? 1 : -1})
+                paths = uPlot.paths.bars({size: [1, 100], align: 1})
             }
             else if (this.data.paths[i] == UplotPath.Step) {
                 paths = uPlot.paths.stepped({align: 1});

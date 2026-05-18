@@ -167,7 +167,7 @@ class ChargeHistoryGraph extends Component<{samples: ChargeHistorySample[], char
     power_price_ref = createRef<UplotWrapperB>();
     cost_ref = createRef<UplotWrapperB>();
     sync = {key: "charge_tracker_history"} as any;
-    static readonly COST_BIN_SECONDS = 30 * 60;
+    static readonly COST_BIN_SECONDS = 15 * 60;
 
     override componentDidMount() {
         this.update_uplot();
@@ -248,8 +248,9 @@ class ChargeHistoryGraph extends Component<{samples: ChargeHistorySample[], char
 
         const data: UplotData = {
             keys: [null, "cost"],
-            names: [null, "Gesamtpreis je 30 min"],
+            names: [null, "Gesamtpreis je 15 min"],
             values: [[], []],
+            filled: [null, true],
             paths: [null, UplotPath.Bar],
             lines_vertical: [
                 {index: 0, text: "Start", color: [64, 64, 64, 0.10]},
