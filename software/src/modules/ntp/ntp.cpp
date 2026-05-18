@@ -28,7 +28,20 @@
 
 #include "gcc_warnings.h"
 
-void ntp_sync_cb(struct timeval *tv)
+static void set_sntp_server_slot(uint8_t slot, const String &server)
+{
+    // The ESP SNTP implementation stores raw pointers and does not duplicate
+    // the passed strings. `ntp_server1` / `ntp_server2` are long-lived members,
+    // so using their c_str() pointers here is safe across the SNTP runtime as
+    // long as callers pass references to those persistent member strings.
+    //
+    // Passing nullptr explicitly clears a previously configured slot. This is
+    // important when switching between DHCP/manual modes at runtime so stale
+    // server entries from the prior mode are not kept unintentionally.
+    esp_sntp_setservername(slot, server.isEmpty() ? nullptr : server.c_str());
+}
+
+static void ntp_sync_cb(struct timeval *tv)
 {
 #if MODULE_RTC_AVAILABLE()
     rtc.push_system_time(*tv, Rtc::Quality::High);
@@ -37,11 +50,6 @@ void ntp_sync_cb(struct timeval *tv)
 #endif
 
     ntp.time_synced_NTPThread();
-}
-
-extern "C" void sntp_sync_time(struct timeval *tv)
-{
-    ntp_sync_cb(tv);
 }
 
 void NTP::pre_setup()
@@ -128,21 +136,48 @@ void NTP::apply_config()
 
     const bool set_servers_from_dhcp = config.get("use_dhcp")->asBool();
 
+    // Historical context for removed legacy callback override:
+    //
+    // Earlier firmware versions implemented a global
+    // `extern "C" sntp_sync_time(struct timeval*)` symbol and routed it into
+    // module logic. That path worked as a compatibility override across older
+    // lwIP/ESP-IDF combinations where callback registration behavior differed
+    // or was not yet consistently used.
+    //
+    // We now use the explicit SNTP callback registration API
+    // (`esp_sntp_set_time_sync_notification_cb`) as the single integration
+    // path. This keeps the callback flow deterministic and easier to reason
+    // about: SNTP updates time -> registered callback runs -> RTC/state update.
+    //
+    // Runtime behavior is equivalent for module logic (`ntp_sync_cb` still
+    // performs RTC push + `time_synced_NTPThread()`), but we avoid maintaining
+    // two overlapping callback hooks with potentially different call paths.
     esp_sntp_set_time_sync_notification_cb(ntp_sync_cb);
 
     // Getting SNTP servers from DHCP should be enabled before setting up Ethernet or WiFi.
     esp_sntp_servermode_dhcp(set_servers_from_dhcp);
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
 
+    const String &manual_server_primary = ntp_server1.isEmpty() ? ntp_server2 : ntp_server1;
+    const String &manual_server_secondary = ntp_server2.isEmpty() ? ntp_server1 : ntp_server2;
+
     if (set_servers_from_dhcp) {
-        // If DHCP is enabled, leave slot 0 for the DHCP-provided server.
-        // Manual servers are placed in slots 1 and 2.
-        esp_sntp_setservername(1, ntp_server1.isEmpty() ? ntp_server2.c_str() : ntp_server1.c_str());
-        esp_sntp_setservername(2, ntp_server2.isEmpty() ? ntp_server1.c_str() : ntp_server2.c_str());
+        // DHCP mode: keep slot 0 reserved for server addresses offered via
+        // DHCP and make sure stale manual values from previous configs are
+        // removed first.
+        set_sntp_server_slot(0, String{});
+        set_sntp_server_slot(1, manual_server_primary);
+        set_sntp_server_slot(2, manual_server_secondary);
     } else {
-        // If DHCP is disabled, use slots 0 and 1 for manual servers.
-        esp_sntp_setservername(0, ntp_server1.isEmpty() ? ntp_server2.c_str() : ntp_server1.c_str());
-        esp_sntp_setservername(1, ntp_server2.isEmpty() ? ntp_server1.c_str() : ntp_server2.c_str());
+        // Manual mode: use slots 0/1 for configured servers and clear slot 2 so
+        // no stale fallback from a prior DHCP-enabled config survives.
+        set_sntp_server_slot(0, manual_server_primary);
+        set_sntp_server_slot(1, manual_server_secondary);
+        set_sntp_server_slot(2, String{});
+    }
+
+    if (manual_server_primary.isEmpty()) {
+        logger.printfln("No manual NTP servers configured; relying on DHCP-provided servers only.");
     }
 
 #if MODULE_NETWORK_AVAILABLE()
