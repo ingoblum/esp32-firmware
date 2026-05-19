@@ -49,7 +49,7 @@ void API::pre_setup()
     );
 
     version = Config::Object({
-        {"firmware", Config::Str(build_version_full_str(), 0, static_cast<uint16_t>(build_version_full_str_len))},
+        {"firmware", Config::Str(build_filename_str(), 0, static_cast<uint16_t>(build_filename_str_len))},
         {"config", Config::Str("", 0, 12)},
         {"config_type", Config::Str("", 0, 32)},
     });
