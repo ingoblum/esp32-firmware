@@ -31,22 +31,28 @@ export const enum UplotPath {
     Line = 0,
     Bar = 1,
     Step = 2,
+    StepCentered = 3,
+    BarInterval = 4,
 }
 
 export interface UplotData {
     keys: string[];
     names: string[];
     values: number[][];
+    x_min?: number;
+    x_max?: number;
     extras?: number[][];
     stacked?: boolean[];
     filled?: boolean[];
+    span_gaps?: boolean[];
+    bar_widths?: (number[] | null)[];
     paths?: UplotPath[];
     value_names?: {[id: number]: string}[];
     value_strokes?: {[id: number]: string}[];
     value_fills?: {[id: number]: string}[];
     extra_names?: {[id: number]: string}[];
     default_visibilty?: boolean[];
-    lines_vertical?: {index: number, text: string, color: [number, number, number, number]}[];
+    lines_vertical?: {index: number, text: string, color: [number, number, number, number], line_only?: boolean}[];
     y_axes?: ('y' | 'y2')[];
 }
 
@@ -69,6 +75,7 @@ interface UplotWrapperBProps {
     y_max?: number;
     y_unit: string;
     y_label: string;
+    y_axis_color?: string;
     y_digits: number;
     y_three_split?: boolean;
     y_skip_upper?: boolean;
@@ -81,6 +88,8 @@ interface UplotWrapperBProps {
     y2_max?: number;
     y2_unit?: string;
     y2_label?: string;
+    y2_axis_color?: string;
+    y2_axis_visible?: boolean;
     y2_digits?: number;
     y2_skip_upper?: boolean;
     y2_scale_ignore_visibility?: boolean; // default: false,
@@ -231,7 +240,7 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
                     },
                 },
                 {
-                    stroke: chartColors.axisText,
+                    stroke: this.props.y_axis_color ?? chartColors.axisText,
                     grid: {
                         stroke: chartColors.gridStroke,
                     },
@@ -310,6 +319,10 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
             scales: {
                 x: {
                     range: (self: uPlot, initMin: number, initMax: number, scaleKey: string): uPlot.Range.MinMax => {
+                        if (this.data?.x_min !== undefined && this.data?.x_max !== undefined) {
+                            return [this.data.x_min, this.data.x_max];
+                        }
+
                         let pad = (initMax - initMin) * this.props.x_padding_factor;
                         return [initMin - pad, initMax + pad];
                     },
@@ -400,7 +413,7 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
                         ],
                         draw: [
                             (self: uPlot) => {
-                                // Make blocks from vertical lines
+                                // Make blocks from vertical lines (unless line_only is requested)
                                 let blocks: {
                                     start_index: number,
                                     end_index: number,
@@ -409,6 +422,10 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
                                 const col_eq = (a: [number, number, number, number], b: [number, number, number, number]) =>  a.every((v, i) => v === b[i]);
                                 let lines_vertical_sorted = this.data?.lines_vertical?.sort((a, b) => a.index - b.index);
                                 lines_vertical_sorted?.forEach(line  => {
+                                    if (line.line_only) {
+                                        return;
+                                    }
+
                                     if (blocks.length == 0) {
                                         blocks.push({
                                             start_index: line.index,
@@ -450,7 +467,18 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
 
                                         let xd = self.data[0];
                                         let x  = self.valToPos(xd[line.index],   'x', true);
-                                        let xn = self.valToPos(xd[line.index+1], 'x', true);
+                                        let xn = self.valToPos(xd[Math.min(line.index + 1, xd.length - 1)], 'x', true);
+
+                                        if (line.line_only) {
+                                            ctx.save();
+                                            ctx.beginPath();
+                                            ctx.lineWidth = 1;
+                                            ctx.strokeStyle = `rgba(${line.color[0]}, ${line.color[1]}, ${line.color[2]}, ${line.color[3]})`;
+                                            ctx.moveTo(x, bbox.top);
+                                            ctx.lineTo(x, bbox.top + bbox.height);
+                                            ctx.stroke();
+                                            ctx.restore();
+                                        }
 
                                         ctx.save();
 
@@ -470,10 +498,12 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
         };
 
         if (this.props.y2_enable === true) {
+            const y2_axis_visible = this.props.y2_axis_visible !== false;
+
             options.axes.push({
-                stroke: chartColors.axisText,
+                stroke: y2_axis_visible ? (this.props.y2_axis_color ?? chartColors.axisText) : "transparent",
                 ticks: {
-                    stroke: chartColors.axisStroke,
+                    stroke: y2_axis_visible ? chartColors.axisStroke : "transparent",
                 },
                 label: this.props.y2_label,
                 labelSize: this.y2_label_size,
@@ -517,6 +547,11 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
                 },
                 values: (self: uPlot, splits: number[]) => {
                     let values: string[] = new Array(splits.length);
+
+                    if (!y2_axis_visible) {
+                        values.fill('');
+                        return values;
+                    }
 
                     for (let digits = 0; digits <= 3; ++digits) {
                         let last_value: string = null;
@@ -640,6 +675,18 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
             }
         }
 
+        if (this.uplot.axes[1]) {
+            this.uplot.axes[1].stroke = () => this.props.y_axis_color ?? chart_colors.axisText;
+        }
+
+        if (this.props.y2_enable === true && this.uplot.axes[2]) {
+            this.uplot.axes[2].stroke = () => this.props.y2_axis_visible === false ? "transparent" : (this.props.y2_axis_color ?? chart_colors.axisText);
+
+            if (this.uplot.axes[2].ticks) {
+                this.uplot.axes[2].ticks.stroke = () => this.props.y2_axis_visible === false ? "transparent" : chart_colors.axisStroke;
+            }
+        }
+
         this.uplot.redraw(false, true);
     }
 
@@ -719,16 +766,172 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
         }
     }
 
+    get_centered_step_path(): uPlot.Series.PathBuilder {
+        return ((self: uPlot, seriesIdx: number, idx0: number, idx1: number) => {
+            const xValues = self.data[0] as number[];
+            const yValues = self.data[seriesIdx] as number[];
+            const scale = self.series[seriesIdx].scale;
+            const path = new Path2D();
+            let previousY: number = null;
+            let drew = false;
+
+            for (let idx = idx0; idx <= idx1; ++idx) {
+                const value = yValues[idx];
+
+                if (value == null) {
+                    continue;
+                }
+
+                const x = xValues[idx];
+                let previousIdx = idx - 1;
+                while (previousIdx >= idx0 && yValues[previousIdx] == null) {
+                    --previousIdx;
+                }
+
+                let nextIdx = idx + 1;
+                while (nextIdx <= idx1 && yValues[nextIdx] == null) {
+                    ++nextIdx;
+                }
+
+                const leftValue = previousIdx >= idx0
+                    ? (xValues[previousIdx] + x) / 2
+                    : (this.data?.x_min ?? x);
+                const rightValue = nextIdx <= idx1
+                    ? (x + xValues[nextIdx]) / 2
+                    : (this.data?.x_max ?? x);
+
+                const left = self.valToPos(leftValue, 'x', true);
+                const right = self.valToPos(rightValue, 'x', true);
+                const y = self.valToPos(value, scale, true);
+
+                if (!drew) {
+                    path.moveTo(left, y);
+                } else {
+                    path.lineTo(left, previousY);
+                    path.lineTo(left, y);
+                }
+
+                path.lineTo(right, y);
+                previousY = y;
+                drew = true;
+            }
+
+            return {
+                stroke: drew ? path : null,
+                fill: null,
+                clip: null,
+                band: null,
+                gaps: null,
+                flags: 1,
+            } as any;
+        }) as uPlot.Series.PathBuilder;
+    }
+
+    get_interval_bar_path(seriesIdx: number): uPlot.Series.PathBuilder {
+        return ((self: uPlot, pathSeriesIdx: number, idx0: number, idx1: number) => {
+            const xValues = self.data[0] as number[];
+            const yValues = self.data[pathSeriesIdx] as number[];
+            const widths = this.data?.bar_widths?.[seriesIdx] ?? null;
+            const scale = self.series[pathSeriesIdx].scale;
+            const path = new Path2D();
+            let drew = false;
+            const baseY = self.valToPos(0, scale, true);
+
+            for (let idx = idx0; idx <= idx1; ++idx) {
+                const value = yValues[idx];
+                const widthSeconds = widths?.[idx] ?? 0;
+
+                if (value == null || widthSeconds <= 0) {
+                    continue;
+                }
+
+                const center = xValues[idx];
+                const left = self.valToPos(center - widthSeconds / 2, 'x', true);
+                const right = self.valToPos(center + widthSeconds / 2, 'x', true);
+                const valueY = self.valToPos(value, scale, true);
+                const x = Math.min(left, right);
+                const w = Math.abs(right - left);
+                const y = Math.min(valueY, baseY);
+                const h = Math.abs(baseY - valueY);
+
+                if (w > 0 && h > 0) {
+                    path.rect(x, y, w, h);
+                    drew = true;
+                }
+            }
+
+            return {
+                stroke: drew ? path : null,
+                fill: drew ? path : null,
+                clip: null,
+                band: null,
+                gaps: null,
+                flags: 1,
+            } as any;
+        }) as uPlot.Series.PathBuilder;
+    }
+
+    get_nearest_series_index(seriesIdx: number, idx: number | null): number | null {
+        if (idx == null || this.data?.values?.[seriesIdx] == null || this.data?.values?.[0] == null) {
+            return null;
+        }
+
+        const values = this.data.values[seriesIdx];
+
+        if (values[idx] != null) {
+            return idx;
+        }
+
+        const xValues = this.data.values[0];
+        const x = xValues[idx];
+        let left = idx - 1;
+        let right = idx + 1;
+
+        while (left >= 0 || right < values.length) {
+            while (left >= 0 && values[left] == null) {
+                --left;
+            }
+
+            while (right < values.length && values[right] == null) {
+                ++right;
+            }
+
+            if (left < 0 && right >= values.length) {
+                return null;
+            }
+
+            if (left < 0) {
+                return right;
+            }
+
+            if (right >= values.length) {
+                return left;
+            }
+
+            return Math.abs(x - xValues[left]) <= Math.abs(xValues[right] - x) ? left : right;
+        }
+
+        return null;
+    }
+
     get_series_opts(i: number): uPlot.Series {
         let color = plot.get_color(this.props.color_cache_group, this.data.keys[i]);
         let paths = undefined;
 
         if (this.data.paths) {
             if (this.data.paths[i] == UplotPath.Bar) {
-                paths = uPlot.paths.bars({size: [1, 100], align: 1})
+                // Use centered bars and avoid the hard 100px cap, so fixed-time
+                // bins (e.g. 15 minutes) visually fill their interval.
+                paths = uPlot.paths.bars({size: [1, 10000], align: 0})
             }
             else if (this.data.paths[i] == UplotPath.Step) {
                 paths = uPlot.paths.stepped({align: 1});
+            }
+            else if (this.data.paths[i] == UplotPath.StepCentered) {
+                paths = this.get_centered_step_path();
+            }
+            else if (this.data.paths[i] == UplotPath.BarInterval) {
+                paths = this.get_interval_bar_path(i);
             }
         }
 
@@ -739,17 +942,19 @@ export class UplotWrapperB extends Component<UplotWrapperBProps, {}> {
         return {
             show: this.series_visibility[this.data.keys[i]],
             pxAlign: 0,
-            spanGaps: false,
+            spanGaps: this.data.span_gaps ? this.data.span_gaps[i] : false,
             label: this.data.names[i],
             value: (self: uPlot, rawValue: number, seriesIdx: number, idx: number | null) => {
-                if (rawValue !== null) {
+                let valueIdx = this.get_nearest_series_index(seriesIdx, idx);
+
+                if (valueIdx !== null) {
                     let prefix = '';
 
                     if (this.data.extras && this.data.extra_names && this.data.extra_names[seriesIdx]) {
-                        prefix = this.data.extra_names[seriesIdx][this.data.extras[seriesIdx][idx]] + ' / ';
+                        prefix = this.data.extra_names[seriesIdx][this.data.extras[seriesIdx][valueIdx]] + ' / ';
                     }
 
-                    return prefix + util.toLocaleFixed(this.data.values[seriesIdx][idx], y_digits) + " " + y_unit;
+                    return prefix + util.toLocaleFixed(this.data.values[seriesIdx][valueIdx], y_digits) + " " + y_unit;
                 }
 
                 return null;
