@@ -813,7 +813,7 @@ void ChargeTracker::resetDynamicHistoryTracking(float kwh_start, uint32_t start_
     dynamic_history_last_kwh = kwh_start;
 }
 
-void ChargeTracker::sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh_milli, bool force)
+void ChargeTracker::sampleDynamicHistory(float kwh_abs, millicent price_ct_per_kwh_milli, bool force)
 {
     const uint32_t current_uptime = millis();
     if (dynamic_history_last_ms == 0 || std::isnan(dynamic_history_last_kwh) || std::isnan(kwh_abs)) {
@@ -928,7 +928,7 @@ cent ChargeTracker::finishCostTracking(float kwh_end)
     return static_cast<cent>(std::round(accumulated_cost / 1000.0));
 #else
     (void)kwh_end;
-    return CHARGE_per_charge_cost_UNAVAILABLE;
+    return PRICE_UNAVAILABLE;
 #endif
 }
 
@@ -995,7 +995,7 @@ void ChargeTracker::getCurrentNfcTag(uint8_t *tag_type, char tag_id[CHARGE_SUPPL
     strlcpy(tag_id, tag_id_config->asEphemeralCStr(), CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH);
 }
 
-void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent, uint8_t tag_type, const char *tag_id)
+void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, cent cost_cent, uint8_t tag_type, const char *tag_id)
 {
     logger.printfln("writeSupplementaryRecord aufgerufen. file_index: %lu, record_index: %lu", file_index, record_index);
     if (record_index >= (CHARGE_RECORD_MAX_FILE_SIZE / CHARGE_RECORD_SIZE)) {
@@ -1120,10 +1120,14 @@ bool ChargeTracker::upgradeSupplementaryRecordFile(uint32_t file_index)
     }
 
     supplementary_record_file.seek(0);
-    uint32_t legacy_cost_cent = PRICE_UNAVAILABLE;
+    uint32_t legacy_cost_cent = UINT32_MAX;
     while (supplementary_record_file.read(reinterpret_cast<uint8_t *>(&legacy_cost_cent), sizeof(legacy_cost_cent)) == sizeof(legacy_cost_cent)) {
         ChargeSupplementaryRecord upgraded_record;
-        upgraded_record.cost = legacy_cost_cent;
+        if (legacy_cost_cent == UINT32_MAX || legacy_cost_cent > static_cast<uint32_t>(INT32_MAX)) {
+            upgraded_record.cost = PRICE_UNAVAILABLE;
+        } else {
+            upgraded_record.cost = static_cast<cent>(legacy_cost_cent);
+        }
         if (upgraded_file.write(reinterpret_cast<const uint8_t *>(&upgraded_record), sizeof(upgraded_record)) != sizeof(upgraded_record)) {
             upgraded_file.close();
             supplementary_record_file.close();
@@ -1367,7 +1371,7 @@ size_t get_display_name(uint8_t user_id, char *ret_buf, display_name_entry *disp
     return display_name_cache[user_id].length;
 }
 
-static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, Language language, uint32_t electricity_price, uint32_t per_charge_cost, display_name_entry *display_name_cache)
+static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, Language language, uint32_t electricity_price, cent per_charge_cost, display_name_entry *display_name_cache)
 {
     buf += 1 + timestamp_min_to_date_time_string(buf, cs.timestamp_minutes, language);
 
@@ -1417,11 +1421,20 @@ static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, L
     }
 
     if (per_charge_cost != PRICE_UNAVAILABLE) {
-        if (per_charge_cost > 999999) {
+        const int64_t per_charge_cost_abs = per_charge_cost < 0 ? -static_cast<int64_t>(per_charge_cost) : static_cast<int64_t>(per_charge_cost);
+        const bool is_negative_per_charge_cost = per_charge_cost < 0;
+
+        if (per_charge_cost_abs > 999999) {
             memcpy(buf, ">=10000", ARRAY_SIZE(">=10000"));
             buf += ARRAY_SIZE(">=10000");
         } else {
-            buf += 1 + sprintf_u(buf, "%ld%c%02ld", per_charge_cost / 100, (language == Language::English) ? '.' : ',', per_charge_cost % 100);
+            const int64_t euros = per_charge_cost_abs / 100;
+            const int64_t cents = per_charge_cost_abs % 100;
+            if (is_negative_per_charge_cost) {
+                buf += 1 + sprintf_u(buf, "-%lld%c%02lld", static_cast<long long>(euros), (language == Language::English) ? '.' : ',', static_cast<long long>(cents));
+            } else {
+                buf += 1 + sprintf_u(buf, "%lld%c%02lld", static_cast<long long>(euros), (language == Language::English) ? '.' : ',', static_cast<long long>(cents));
+            }
         }
     } else if (electricity_price == 0) {
         memcpy(buf, "---", ARRAY_SIZE("---"));
@@ -2476,7 +2489,7 @@ int ChargeTracker::generate_pdf(
 ) {
     char stats_buf[384];
     double charged_sum = 0;
-    uint32_t charged_cost_sum = 0;
+    int64_t charged_cost_sum = 0;
     bool seen_charge_cost = false;
     bool seen_charges_without_meter = false;
     int charge_records = 0;
@@ -2599,9 +2612,12 @@ search_done:
         // The sum mixes dynamic supplementary record costs where available with the fixed
         // configured price as a fallback for older records. If no row has any
         // usable price, omit the summary line instead of showing a misleading 0.
-        int written = sprintf_u(stats_head, "%s: %ld.%02ld€ (%.2f ct/kWh)%s",
+        const int64_t charged_cost_sum_abs = charged_cost_sum < 0 ? -charged_cost_sum : charged_cost_sum;
+        const char *charged_cost_sign = charged_cost_sum < 0 ? "-" : "";
+        int written = sprintf_u(stats_head, "%s: %s%lld.%02lld€ (%.2f ct/kWh)%s",
                         (language == Language::English) ? "Total cost" : "Gesamtkosten",
-                        charged_cost_sum / 100, charged_cost_sum % 100,
+                        charged_cost_sign,
+                        static_cast<long long>(charged_cost_sum_abs / 100), static_cast<long long>(charged_cost_sum_abs % 100),
                         electricity_price / 100.0f,
                         seen_charges_without_meter ? ((language == Language::English) ? " Incomplete!" : " Unvollständig!") : "");
         if (language == Language::German)

@@ -67,10 +67,10 @@ public:
     bool is_user_tracked(uint8_t user_id);
 
     // Returns the stored dynamic cost in cents for a completed charge or
-    // CHARGE_DYNAMIC_COST_UNAVAILABLE if the supplementary record entry is missing. CSV/PDF
+    // PRICE_UNAVAILABLE if the supplementary record entry is missing. CSV/PDF
     // generation uses this to prefer dynamic prices while keeping a fixed-price
     // fallback for old records.
-    charge_tracker_defs::millicent getStoredCost(uint32_t file_index, uint32_t record_index);
+    charge_tracker_defs::cent getStoredCost(uint32_t file_index, uint32_t record_index);
     bool getSupplementaryRecord(uint32_t file_index, uint32_t record_index, ChargeSupplementaryRecord *supplementary_record);
 
     size_t completeRecordsInLastFile();
@@ -123,10 +123,10 @@ private:
 
     // Beende die Kostenberechnung und gebe die Gesamtkosten in Cent zurück
     charge_tracker_defs::cent finishCostTracking(float kwh_end);
-    void sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh_milli, bool force);
+    void sampleDynamicHistory(float kwh_abs, charge_tracker_defs::millicent price_ct_per_kwh_milli, bool force);
     void resetDynamicHistoryTracking(float kwh_start, uint32_t start_timestamp_minutes);
     void writeDynamicHistorySample(uint32_t file_index, uint32_t record_index, const ChargeDynamicHistorySample &sample);
-    void writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, uint32_t cost_cent, uint8_t tag_type, const char *tag_id);
+    void writeSupplementaryRecord(uint32_t file_index, uint32_t record_index, charge_tracker_defs::cent cost_cent, uint8_t tag_type, const char *tag_id);
     void getCurrentNfcTag(uint8_t *tag_type, char tag_id[CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH]);
     void upgradeSupplementaryRecords();
     bool upgradeSupplementaryRecordFile(uint32_t file_index);

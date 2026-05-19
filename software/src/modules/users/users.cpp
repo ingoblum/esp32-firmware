@@ -411,17 +411,17 @@ void Users::setup()
     task_scheduler.scheduleUncancelable([this, outer_charger_state](){
         static uint8_t last_charger_state = outer_charger_state;
 
-        uint8_t charger_state = get_charger_state();
-        if (charger_state == last_charger_state)
+        uint8_t current_charger_state = get_charger_state();
+        if (current_charger_state == last_charger_state)
             return;
 
-        logger.printfln("Charger state changed from %u to %u", last_charger_state, charger_state);
-        last_charger_state = charger_state;
+        logger.printfln("Charger state changed from %u to %u", last_charger_state, current_charger_state);
+        last_charger_state = current_charger_state;
 
         // stop_charging and start_charging will check
         // if a start/stop was already tracked, so it is safe
         // to call those methods more often than needed.
-        switch(charger_state) {
+        switch(current_charger_state) {
             case CHARGER_STATE_NOT_PLUGGED_IN:
                 this->stop_charging(0, true);
                 break;

@@ -17,10 +17,10 @@ interface Charge {
     // increasing payload size requirements on current firmware.
     file_index?: number;
     record_index?: number;
-    // Cent amount calculated from Day Ahead Prices. 0xFFFFFFFF means that this
+    // Cent amount calculated from Day Ahead Prices. 0x7FFFFFFF means that this
     // record has no dynamic price data and the frontend should use the
     // configured fixed price fallback instead.
-    dynamic_cost: number;
+    per_charge_cost: number;
     // Keep this type compact. charge_tracker/last_charges is part of the
     // initial WebSocket state and WARP 1 only has a 4480-byte payload buffer.
     // Repeated helper fields such as history file/record indices have already
@@ -85,9 +85,9 @@ interface current_charge_base {
     meter_start: number;
     evse_uptime_start: number;
     timestamp_minutes: number;
-    // Current in-memory dynamic cost estimate in cents, with 0xFFFFFFFF used
+    // Current in-memory dynamic cost estimate in cents, with 0x7FFFFFFF used
     // until a Day Ahead price and a valid meter delta have been sampled.
-    dynamic_cost: number;
+    per_charge_cost: number;
 }
 
 interface current_charge_nfc {

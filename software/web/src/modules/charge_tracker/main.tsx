@@ -50,7 +50,7 @@ export function ChargeTrackerNavbar() {
 }
 
 const MAX_TRACKED_CHARGES = 7680;
-const CHARGE_DYNAMIC_COST_UNAVAILABLE = 0xFFFFFFFF;
+const CHARGE_DYNAMIC_COST_UNAVAILABLE = 0x7FFFFFFF;
 
 type Charge = API.getType["charge_tracker/last_charges"][0];
 type ChargeTrackerConfig = API.getType["charge_tracker/config"];
@@ -121,12 +121,12 @@ function TrackedCharge(props: {charge: Charge, users: API.getType['users/config'
     // Prefer the backend's dynamic Day Ahead cost when present. Older records
     // and records without a valid dynamic price keep using the configured fixed
     // electricity price so the UI stays backward compatible with existing logs.
-    let have_dynamic_cost = props.charge.dynamic_cost != null // Safety check against null, however a null value shouldn't occur.
-        && props.charge.dynamic_cost != CHARGE_DYNAMIC_COST_UNAVAILABLE; // instead CHARGE_DYNAMIC_COST_UNAVAILABLE is used to indicate a missing dynamic cost values
+    let have_dynamic_cost = props.charge.per_charge_cost != null // Safety check against null, however a null value shouldn't occur.
+        && props.charge.per_charge_cost != CHARGE_DYNAMIC_COST_UNAVAILABLE; // instead CHARGE_DYNAMIC_COST_UNAVAILABLE is used to indicate a missing dynamic cost values
         
     let have_charge_cost = have_dynamic_cost || (props.electricity_price > 0 && props.charge.energy_charged != null);
     let charge_cost = have_dynamic_cost
-        ? props.charge.dynamic_cost / 100
+        ? props.charge.per_charge_cost / 100
         : props.electricity_price / 100 * props.charge.energy_charged / 100;
 
     return <ListGroupItem action={props.onClick != null} onClick={props.onClick}>
@@ -1133,7 +1133,7 @@ export class ChargeTrackerStatus extends Component {
                 energy_charged: (energy_abs === null || cc.meter_start === null) ? null : (energy_abs - cc.meter_start),
                 timestamp_minutes: cc.timestamp_minutes,
                 user_id: cc.user_id,
-                dynamic_cost: cc.dynamic_cost
+                per_charge_cost: cc.per_charge_cost
             };
 
             current_charge = <FormRow label={__("charge_tracker.status.current_charge")}>
