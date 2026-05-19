@@ -177,10 +177,20 @@ class ChargeHistoryGraph extends Component<{samples: ChargeHistorySample[], char
         this.update_uplot();
     }
 
-    build_power_price_data(samples: ChargeHistorySample[], start_seconds: number): UplotData {
-        const last = samples[samples.length - 1];
-        const end_seconds = last == null ? start_seconds : start_seconds + Math.max(1, last.t) * 60;
-        const data: UplotData = {
+    /**
+     * Prepares data for the Power and Price chart (upper chart).
+     * 
+     * This method converts the raw history samples into a format suitable for uPlot.
+     * It uses a Step-path to show the power and price changes over time.
+     * 
+     * @param historySamples Raw samples from the hardware
+     * @param chargeStartSeconds Absolute start timestamp of the charge in seconds
+     */
+    build_power_price_data(historySamples: ChargeHistorySample[], chargeStartSeconds: number): UplotData {
+        const lastSample = historySamples[historySamples.length - 1];
+        const chargeEndSeconds = lastSample == null ? chargeStartSeconds : chargeStartSeconds + Math.max(1, lastSample.t) * 60;
+        
+        const uplotData: UplotData = {
             keys: [null, "power", "price"],
             names: [null, "Leistung", "Börsenpreis inkl. MwSt."],
             values: [[], [], []],
@@ -188,65 +198,88 @@ class ChargeHistoryGraph extends Component<{samples: ChargeHistorySample[], char
             y_axes: [null, "y", "y2"],
             lines_vertical: [
                 {index: 0, text: "Start", color: [64, 64, 64, 0.10]},
-                {index: samples.length, text: "Ende", color: [64, 64, 64, 0.10]},
+                {index: historySamples.length, text: "Ende", color: [64, 64, 64, 0.10]},
             ],
         };
 
-        data.values[0].push(start_seconds);
-        data.values[1].push(samples[0].w / 1000.0);
-        data.values[2].push(samples[0].ct == 0x7FFFFFFF ? null : samples[0].ct / 1000.0);
+        // Add the initial data point at the start of the charge
+        uplotData.values[0].push(chargeStartSeconds);
+        uplotData.values[1].push(historySamples[0].w / 1000.0); // Convert Watts to kW
+        uplotData.values[2].push(historySamples[0].ct == 0x7FFFFFFF ? null : historySamples[0].ct / 1000.0); // Convert milli-ct to ct/kWh
 
-        for (const s of samples) {
-            data.values[0].push(start_seconds + s.t * 60);
-            data.values[1].push(s.w / 1000.0);
-            data.values[2].push(s.ct == 0x7FFFFFFF ? null : s.ct / 1000.0);
+        // Add all intermediate samples
+        for (const sample of historySamples) {
+            uplotData.values[0].push(chargeStartSeconds + sample.t * 60);
+            uplotData.values[1].push(sample.w / 1000.0);
+            uplotData.values[2].push(sample.ct == 0x7FFFFFFF ? null : sample.ct / 1000.0);
         }
 
-        if (last != null) {
-            data.values[0].push(end_seconds);
-            data.values[1].push(last.w / 1000.0);
-            data.values[2].push(last.ct == 0x7FFFFFFF ? null : last.ct / 1000.0);
+        // Add a final anchor point to ensure the last step is drawn correctly until the end of the charge
+        if (lastSample != null) {
+            uplotData.values[0].push(chargeEndSeconds);
+            uplotData.values[1].push(lastSample.w / 1000.0);
+            uplotData.values[2].push(lastSample.ct == 0x7FFFFFFF ? null : lastSample.ct / 1000.0);
         }
 
-        return data;
+        return uplotData;
     }
 
-    build_cost_data(samples: ChargeHistorySample[], start_seconds: number): UplotData {
-        const first_bin = start_seconds;
-        const last_sample = samples[samples.length - 1];
-        const end_seconds = start_seconds + Math.max(1, last_sample.t) * 60;
-        const bin_count = Math.max(1, Math.ceil((end_seconds - first_bin) / ChargeHistoryGraph.COST_BIN_SECONDS));
-        const bins = new Array(bin_count).fill(0);
+    /**
+     * Prepares data for the Cost Accumulation chart (lower chart).
+     * 
+     * This method aggregates energy costs into fixed 15-minute time bins.
+     * Energy and costs are linearly distributed if a sample interval spans multiple bins.
+     * 
+     * @param historySamples Raw samples from the hardware
+     * @param chargeStartSeconds Absolute start timestamp of the charge in seconds
+     */
+    build_cost_data(historySamples: ChargeHistorySample[], chargeStartSeconds: number): UplotData {
+        // Align the first bin to a 15-minute calendar boundary (e.g., 12:00, 12:15, 12:30)
+        const alignedStartTimestampSeconds = Math.floor(chargeStartSeconds / ChargeHistoryGraph.COST_BIN_SECONDS) * ChargeHistoryGraph.COST_BIN_SECONDS;
+        
+        const lastSample = historySamples[historySamples.length - 1];
+        const chargeEndSeconds = chargeStartSeconds + Math.max(1, lastSample.t) * 60;
+        
+        // Calculate how many 15-minute bins we need to cover the entire charge duration
+        const totalBinCount = Math.max(1, Math.ceil((chargeEndSeconds - alignedStartTimestampSeconds) / ChargeHistoryGraph.COST_BIN_SECONDS));
+        const accumulatedCostsPerBin = new Array(totalBinCount).fill(0);
 
-        let previous_t = 0;
-        for (const s of samples) {
-            const interval_minutes = Math.max(0, s.t - previous_t);
-            const interval_start_seconds = start_seconds + previous_t * 60;
-            const interval_end_seconds = start_seconds + s.t * 60;
-            previous_t = s.t;
+        let previousSampleOffsetMinutes = 0;
+        for (const sample of historySamples) {
+            const segmentDurationMinutes = Math.max(0, sample.t - previousSampleOffsetMinutes);
+            const segmentStartSeconds = chargeStartSeconds + previousSampleOffsetMinutes * 60;
+            const segmentEndSeconds = chargeStartSeconds + sample.t * 60;
+            previousSampleOffsetMinutes = sample.t;
 
-            if (interval_minutes == 0 || s.ct == 0x7FFFFFFF) {
+            // Skip zero-length intervals or invalid price data
+            if (segmentDurationMinutes == 0 || sample.ct == 0x7FFFFFFF) {
                 continue;
             }
 
-            const price_ct_per_kwh = s.ct / 1000.0;
-            let cursor = interval_start_seconds;
-            while (cursor < interval_end_seconds) {
-                const bin_index = Math.floor((cursor - first_bin) / ChargeHistoryGraph.COST_BIN_SECONDS);
-                const bin_end = first_bin + (bin_index + 1) * ChargeHistoryGraph.COST_BIN_SECONDS;
-                const segment_end = Math.min(interval_end_seconds, bin_end);
-                const segment_minutes = Math.max(0, (segment_end - cursor) / 60.0);
-                const energy_kwh = (s.w / 1000.0) * (segment_minutes / 60.0);
+            const currentPriceCtPerKwh = sample.ct / 1000.0;
+            let currentTimestampSeconds = segmentStartSeconds;
 
-                if (bin_index >= 0 && bin_index < bins.length) {
-                    bins[bin_index] += energy_kwh * price_ct_per_kwh;
+            // Distribute energy from this sample interval across the affected time bins
+            while (currentTimestampSeconds < segmentEndSeconds) {
+                const currentBinIndex = Math.floor((currentTimestampSeconds - alignedStartTimestampSeconds) / ChargeHistoryGraph.COST_BIN_SECONDS);
+                const currentBinEndSeconds = alignedStartTimestampSeconds + (currentBinIndex + 1) * ChargeHistoryGraph.COST_BIN_SECONDS;
+                
+                // End of the current part: either the end of the current bin or the end of the sample interval
+                const partEndSeconds = Math.min(segmentEndSeconds, currentBinEndSeconds);
+                const partDurationMinutes = Math.max(0, (partEndSeconds - currentTimestampSeconds) / 60.0);
+                
+                // Calculate energy consumed in this specific part of the interval (W -> kWh)
+                const partEnergyKwh = (sample.w / 1000.0) * (partDurationMinutes / 60.0);
+
+                if (currentBinIndex >= 0 && currentBinIndex < accumulatedCostsPerBin.length) {
+                    accumulatedCostsPerBin[currentBinIndex] += partEnergyKwh * currentPriceCtPerKwh;
                 }
 
-                cursor = segment_end;
+                currentTimestampSeconds = partEndSeconds;
             }
         }
 
-        const data: UplotData = {
+        const uplotData: UplotData = {
             keys: [null, "cost"],
             names: [null, "Gesamtpreis je 15 min"],
             values: [[], []],
@@ -254,20 +287,21 @@ class ChargeHistoryGraph extends Component<{samples: ChargeHistorySample[], char
             paths: [null, UplotPath.Bar],
             lines_vertical: [
                 {index: 0, text: "Start", color: [64, 64, 64, 0.10]},
-                {index: bin_count - 1, text: "Ende", color: [64, 64, 64, 0.10]},
+                {index: totalBinCount - 1, text: "Ende", color: [64, 64, 64, 0.10]},
             ],
         };
 
-        for (let i = 0; i < bins.length; ++i) {
-            data.values[0].push(first_bin + i * ChargeHistoryGraph.COST_BIN_SECONDS);
-            data.values[1].push(bins[i]);
+        // Fill the uPlot data arrays with the aggregated costs
+        for (let i = 0; i < accumulatedCostsPerBin.length; ++i) {
+            uplotData.values[0].push(alignedStartTimestampSeconds + i * ChargeHistoryGraph.COST_BIN_SECONDS);
+            uplotData.values[1].push(accumulatedCostsPerBin[i]);
         }
 
         // Force identical x-range with the upper chart so timestamps line up visually.
-        data.values[0].push(end_seconds);
-        data.values[1].push(null);
+        uplotData.values[0].push(chargeEndSeconds);
+        uplotData.values[1].push(null);
 
-        return data;
+        return uplotData;
     }
 
     update_uplot() {

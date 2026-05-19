@@ -70,7 +70,7 @@ public:
     // CHARGE_DYNAMIC_COST_UNAVAILABLE if the supplementary record entry is missing. CSV/PDF
     // generation uses this to prefer dynamic prices while keeping a fixed-price
     // fallback for old records.
-    uint32_t getSupplementaryRecordCost(uint32_t file_index, uint32_t record_index);
+    charge_tracker_defs::millicent getStoredCost(uint32_t file_index, uint32_t record_index);
     bool getSupplementaryRecord(uint32_t file_index, uint32_t record_index, ChargeSupplementaryRecord *supplementary_record);
 
     size_t completeRecordsInLastFile();
@@ -107,13 +107,22 @@ private:
     void repair_charges();
     void removeOrphanedRecordFiles(File &folder, uint32_t first, uint32_t last, bool have_charge_records);
 
+    // Datentypen, die für die Preisberechnung und Historypersistenz benutzt werden
+    // um einen eindeutiger zu definieren, was der Inhalt ist ohne ein Suffix im Variablennamen
+    // mitzuschleppen
+    using timestamp = uint64_t; // Absolute Zeit (ms seit Epoch)
+    using duration  = uint32_t; // Zeitspanne (ms)
+    using uptime = uint32_t; // Die Uptime wird z.B. von millis() zurückgegeben
+
     // Dynamic-price accounting is kept in memory while a charge is active. Each
     // sample multiplies the newly charged kWh since the previous sample with
     // the price that was valid for that interval. At charge end only the final
     // rounded cent value is persisted in the supplementary record file.
     void startDynamicCostTracking(float kwh_start);
     void sampleDynamicCost(float kwh_abs = NAN);
-    uint32_t finishDynamicCostTracking(float kwh_end);
+
+    // Beende die Kostenberechnung und gebe die Gesamtkosten in Cent zurück
+    charge_tracker_defs::cent finishCostTracking(float kwh_end);
     void sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh_milli, bool force);
     void resetDynamicHistoryTracking(float kwh_start, uint32_t start_timestamp_minutes);
     void writeDynamicHistorySample(uint32_t file_index, uint32_t record_index, const ChargeDynamicHistorySample &sample);
@@ -122,16 +131,24 @@ private:
     void upgradeSupplementaryRecords();
     bool upgradeSupplementaryRecordFile(uint32_t file_index);
     bool findDynamicHistoryRecord(uint32_t timestamp_minutes, uint32_t charge_duration, uint32_t *file_index, uint32_t *record_index);
+
     int generate_pdf(std::function<int(const void *buffer, size_t len)> &&callback, int user_filter, uint32_t start_timestamp_min, uint32_t end_timestamp_min, uint32_t current_timestamp_min, Language language, const char *letterhead, int letterhead_lines, WebServerRequest *request);
 
     Config last_charges_prototype;
     Config charge_log_send_prototype;
 
     uint64_t dynamic_cost_task_id = 0;
-    bool dynamic_cost_tracking = false;
-    float dynamic_cost_last_kwh = NAN;
-    int32_t dynamic_cost_last_price = INT32_MAX;
-    double dynamic_cost_cent = 0.0;
+    bool is_dynamic_cost_tracking_active = false;
+    uint32_t last_sample_time_ms = 0;
+    float last_meter_reading_kwh = NAN;
+    charge_tracker_defs::millicent last_observed_price_milli_ct = charge_tracker_defs::PRICE_UNAVAILABLE;
+
+    // Um Rundungsfehler zu minimieren werden die akkumulierten Kosten als double gespeichert.
+    // Der Inhalt sind millicent, was bei jeder Iteration verhindert, dass ein weiterer Multiplikationsfehler
+    // eingeht.
+    using precise_millicent=double;
+    precise_millicent accumulated_cost = 0.0;
+
     uint32_t dynamic_history_file_index = 0;
     uint32_t dynamic_history_record_index = 0;
     uint32_t dynamic_history_start_ms = 0;

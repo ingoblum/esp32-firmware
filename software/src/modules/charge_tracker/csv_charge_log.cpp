@@ -34,6 +34,8 @@
 #define EVENT_LOG_PREFIX "csv_charge_log"
 #define MAX_ACCUMULATED 2048
 
+using namespace charge_tracker_defs;
+
 const char* CSVTranslations::getHeaderStart(Language language) {
     return (language == Language::English) ? "Start time" : "Startzeit";
 }
@@ -351,9 +353,9 @@ int CSVChargeLogGenerator::generateCSV(const CSVGenerationParams& params,
                 energy_charged = record->ce.meter_end - record->cs.meter_start;
             }
 
-            const uint32_t dynamic_cost_cent = charge_tracker.getSupplementaryRecordCost(file_idx, record_idx);
+            const cent dynamic_cost_cent = charge_tracker.getStoredCost(file_idx, record_idx);
             float price_euros = NAN;
-            if (dynamic_cost_cent != CHARGE_DYNAMIC_COST_UNAVAILABLE) {
+            if (dynamic_cost_cent != PRICE_UNAVAILABLE) {
                 price_euros = dynamic_cost_cent / 100.0f;
             } else if (params.electricity_price > 0 && !std::isnan(energy_charged) && energy_charged >= 0) {
                 float price_per_kwh = params.electricity_price / 10000.0f;

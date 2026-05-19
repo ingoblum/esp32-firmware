@@ -39,6 +39,8 @@
 #include "charge_tracker_defs.h"
 #include "../users/users.h"
 
+using namespace charge_tracker_defs;
+
 #define PDF_LETTERHEAD_MAX_SIZE 512
 
 static bool repair_logic(Charge *);
@@ -234,7 +236,7 @@ void ChargeTracker::pre_setup()
         {"charge_duration", Config::Uint32(0)},
         {"user_id", Config::Uint8(0)},
         {"energy_charged", Config::Float(0)},
-        {"dynamic_cost", Config::Uint32(CHARGE_DYNAMIC_COST_UNAVAILABLE)}
+        {"per_charge_cost", Config::Int32(PRICE_UNAVAILABLE)}
     });
 
     last_charges = Config::Array(
@@ -249,7 +251,7 @@ void ChargeTracker::pre_setup()
         {"evse_uptime_start", Config::Uint32(0)},
         {"timestamp_minutes", Config::Uint32(0)},
         {"authorization_type", Config::Uint8(0)},
-        {"dynamic_cost", Config::Uint32(CHARGE_DYNAMIC_COST_UNAVAILABLE)},
+        {"per_charge_cost", Config::Int32(PRICE_UNAVAILABLE)},
         {"authorization_info", Config{Config::ConfVariant()}}
     });
 
@@ -394,7 +396,7 @@ bool ChargeTracker::startCharge(uint32_t timestamp_minutes, float meter_start, u
         current_charge.get("evse_uptime_start")->updateUint(evse_uptime);
         current_charge.get("timestamp_minutes")->updateUint(timestamp_minutes);
         current_charge.get("authorization_type")->updateUint(auth_type);
-        current_charge.get("dynamic_cost")->updateUint(CHARGE_DYNAMIC_COST_UNAVAILABLE);
+        current_charge.get("per_charge_cost")->updateInt(PRICE_UNAVAILABLE);
         current_charge.get("authorization_info")->value = auth_info;
         current_charge.get("authorization_info")->value.updated = 0xFF;
     });
@@ -415,7 +417,7 @@ logger.printfln("ChargeTracker::endCharge aufgerufen");
     // Finalize before clearing current_charge. The last meter reading supplied
     // by Users is the authoritative end value for both the regular charge log
     // and the dynamic price integration.
-    uint32_t dynamic_cost = finishDynamicCostTracking(meter_end);
+    cent per_charge_cost = finishCostTracking(meter_end);
     uint8_t tag_type = 0;
     char tag_id[CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH] = {};
     getCurrentNfcTag(&tag_type, tag_id);
@@ -448,9 +450,9 @@ logger.printfln("Last file has %u complete records",complete_records);
     //
     // The charge record is complete now, so the supplementary record can be written at the
     // same zero-based record index. Missing or unavailable dynamic prices are
-    // persisted as CHARGE_DYNAMIC_COST_UNAVAILABLE to keep indexing stable.
+    // persisted as CHARGE_per_charge_cost_UNAVAILABLE to keep indexing stable.
     if (complete_records > 0) {
-        writeSupplementaryRecord(this->last_charge_record, complete_records - 1, dynamic_cost, tag_type, tag_id);
+        writeSupplementaryRecord(this->last_charge_record, complete_records - 1, per_charge_cost, tag_type, tag_id);
     } else {
         logger.printfln("Can't track end of charge in supplementary record: No records in file %lu", this->last_charge_record);
     }
@@ -473,7 +475,7 @@ logger.printfln("Lese letzen Record wieder ein und füge ihn in die von der UI a
         current_charge.get("evse_uptime_start")->updateUint(0);
         current_charge.get("timestamp_minutes")->updateUint(0);
         current_charge.get("authorization_type")->updateUint(0);
-        current_charge.get("dynamic_cost")->updateUint(CHARGE_DYNAMIC_COST_UNAVAILABLE);
+        current_charge.get("per_charge_cost")->updateInt(PRICE_UNAVAILABLE);
         current_charge.get("authorization_info")->value = Config::ConfVariant{};
 
         updateState();
@@ -706,60 +708,95 @@ bool ChargeTracker::currentlyCharging()
 void ChargeTracker::startDynamicCostTracking(float kwh_start)
 {
 #if MODULE_DAY_AHEAD_PRICES_AVAILABLE()
-    // Prices are in ct/1000 per kWh. We keep the last known price separately
+    // Prices are in milli-cents (ct/1000) per kWh. We keep the last known price separately
     // from the current Day Ahead state so that energy between two samples is
     // always charged with the price that was valid during that interval.
-    dynamic_cost_tracking = true;
-    dynamic_cost_last_kwh = kwh_start;
-    dynamic_cost_cent = 0.0;
-    dynamic_cost_last_price = INT32_MAX;
+    is_dynamic_cost_tracking_active = true;
+    last_sample_time_ms = millis();
+    last_meter_reading_kwh = kwh_start;
+    accumulated_cost = 0.0;
+    last_observed_price_milli_ct = PRICE_UNAVAILABLE;
 
-    int32_t current_price = INT32_MAX;
+    millicent current_price = PRICE_UNAVAILABLE;
     if (day_ahead_prices.get_current_price().try_unwrap(&current_price)) {
-        dynamic_cost_last_price = current_price;
+        last_observed_price_milli_ct = current_price;
     }
 #else
     (void)kwh_start;
 #endif
 }
 
-void ChargeTracker::sampleDynamicCost(float kwh_abs)
+// Periodic samples obtain their own meter reading. Charge-end samples
+// pass the already-read end value to avoid reading a slightly different
+// value for cost and energy logging.
+void ChargeTracker::sampleDynamicCost(float kwh_abs /* =NAN */)
 {
 #if MODULE_DAY_AHEAD_PRICES_AVAILABLE()
-    if (!dynamic_cost_tracking || !currentlyCharging()) {
+    // Diese Methode wird kontinuierlich während der Lebenszeit aufgerufen,
+    // aber der Preis wird nur während der Ladung berechnet.
+    if (!is_dynamic_cost_tracking_active || !currentlyCharging()) {
         return;
     }
 
+    // Man sollte sich klar machen, dass millis() alle 50 Tage überläuft. Das sollte aber kein Problem
+    // sein, da diese Methode alle 30 Sekunden aufgerufen wird und bei der Bildung der Differenz der
+    // Überlauf herausgerechnet wird.
+    const uptime current_uptime = millis();
+
     if (std::isnan(kwh_abs)) {
-        // Periodic samples obtain their own meter reading. Charge-end samples
-        // pass the already-read end value to avoid reading a slightly different
-        // value for cost and energy logging.
         kwh_abs = get_energy();
     }
 
-    int32_t current_price = INT32_MAX;
-    const bool have_current_price = day_ahead_prices.get_current_price().try_unwrap(&current_price);
+    int32_t next_price = PRICE_UNAVAILABLE;
+    const bool have_next_price = day_ahead_prices.get_current_price().try_unwrap(&next_price);
 
-    const int32_t interval_price = dynamic_cost_last_price;
+    const millicent interval_price = last_observed_price_milli_ct;
 
-    if (!std::isnan(dynamic_cost_last_kwh) && !std::isnan(kwh_abs) && kwh_abs >= dynamic_cost_last_kwh && interval_price != INT32_MAX) {
+    if (!std::isnan(last_meter_reading_kwh) && !std::isnan(kwh_abs) && kwh_abs >= last_meter_reading_kwh && interval_price != PRICE_UNAVAILABLE) {
         // Integrate by absolute energy delta instead of instantaneous power.
         // This follows the meter exactly and avoids accumulating sampling-rate
         // error if the charging power changes between two samples.
-        const double delta_kwh = kwh_abs - dynamic_cost_last_kwh;
-        dynamic_cost_cent += delta_kwh * interval_price / 1000.0;
-        current_charge.get("dynamic_cost")->updateUint(static_cast<uint32_t>(std::round(dynamic_cost_cent)));
+        const double delta_kwh = kwh_abs - last_meter_reading_kwh;
+        const uint32_t interval_ms = current_uptime - last_sample_time_ms;
+
+        // Check if we crossed a price boundary (every 15 minutes / 900 seconds)
+        // since the last sample. If so, split the energy delta proportionally
+        // to ensure steep price flanks are accounted for accurately.
+        static constexpr uint32_t PRICE_STEP_MS = 15 * 60 * 1000;
+        const uint64_t last_calendar_ms = (static_cast<uint64_t>(dynamic_history_start_timestamp_min) * 60000ULL) + (last_sample_time_ms - dynamic_history_start_ms);
+        const uint64_t now_calendar_ms = (static_cast<uint64_t>(dynamic_history_start_timestamp_min) * 60000ULL) + (current_uptime - dynamic_history_start_ms);
+
+        const uint64_t boundary_ms = ((last_calendar_ms / PRICE_STEP_MS) + 1ULL) * PRICE_STEP_MS;
+
+        if (interval_ms > 0 && boundary_ms <= now_calendar_ms && have_next_price && next_price != interval_price) {
+            // A price boundary was crossed during this 30s interval.
+            const uint32_t ms_until_boundary = static_cast<uint32_t>(boundary_ms - last_calendar_ms);
+            const double ratio_pre_boundary = static_cast<double>(ms_until_boundary) / interval_ms;
+            
+            // Proportional split of energy and cost.
+            const double energy_pre_boundary = delta_kwh * ratio_pre_boundary;
+            const double energy_post_boundary = delta_kwh - energy_pre_boundary;
+
+            accumulated_cost += (energy_pre_boundary * interval_price) + (energy_post_boundary * next_price);
+        } else {
+            // Normal case: no boundary crossed or price remained identical.
+            accumulated_cost += delta_kwh * interval_price;
+        }
+        
+        // Update the UI state with rounded whole cents
+        current_charge.get("per_charge_cost")->updateInt(static_cast<cent>(std::round(accumulated_cost / 1000.0)));
     }
 
     sampleDynamicHistory(kwh_abs, interval_price, false);
 
     if (!std::isnan(kwh_abs)) {
-        dynamic_cost_last_kwh = kwh_abs;
+        last_meter_reading_kwh = kwh_abs;
+        last_sample_time_ms = current_uptime;
     }
 
     // Switch to the freshly observed price only after accounting the previous
     // interval. This is especially relevant around 15-minute price boundaries.
-    dynamic_cost_last_price = have_current_price ? current_price : INT32_MAX;
+    last_observed_price_milli_ct = have_next_price ? next_price : PRICE_UNAVAILABLE;
 #else
     (void)kwh_abs;
 #endif
@@ -778,20 +815,20 @@ void ChargeTracker::resetDynamicHistoryTracking(float kwh_start, uint32_t start_
 
 void ChargeTracker::sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh_milli, bool force)
 {
-    const uint32_t now_ms = millis();
+    const uint32_t current_uptime = millis();
     if (dynamic_history_last_ms == 0 || std::isnan(dynamic_history_last_kwh) || std::isnan(kwh_abs)) {
         if (!std::isnan(kwh_abs)) {
             dynamic_history_last_kwh = kwh_abs;
-            dynamic_history_last_ms = now_ms;
+            dynamic_history_last_ms = current_uptime;
         }
         return;
     }
 
-    const uint32_t interval_ms = now_ms - dynamic_history_last_ms;
+    const uint32_t interval_ms = current_uptime - dynamic_history_last_ms;
     if (interval_ms == 0 || kwh_abs < dynamic_history_last_kwh) {
         if (!std::isnan(kwh_abs)) {
             dynamic_history_last_kwh = kwh_abs;
-            dynamic_history_last_ms = now_ms;
+            dynamic_history_last_ms = current_uptime;
         }
         return;
     }
@@ -799,54 +836,71 @@ void ChargeTracker::sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh
     // Keep samples aligned to absolute 5-minute calendar boundaries. This
     // avoids frontend-side interpolation for quarter-hour cost bins while still
     // keeping a partial first/last interval.
-    static constexpr uint64_t boundary_period_ms = CHARGE_DYNAMIC_HISTORY_INTERVAL_MS;
-    const uint64_t start_epoch_like_ms = static_cast<uint64_t>(dynamic_history_start_timestamp_min) * 60000ULL;
+    static constexpr uint64_t CALENDAR_ALIGNMENT_PERIOD_MS = CHARGE_DYNAMIC_HISTORY_INTERVAL_MS;
+    
+    const uint64_t charge_start_calendar_ms = static_cast<uint64_t>(dynamic_history_start_timestamp_min) * 60000ULL;
     const float interval_start_kwh = dynamic_history_last_kwh;
-    const uint64_t last_offset_ms = static_cast<uint64_t>(dynamic_history_last_ms - dynamic_history_start_ms);
-    const uint64_t now_offset_ms = static_cast<uint64_t>(now_ms - dynamic_history_start_ms);
-    const uint64_t last_epoch_like_ms = start_epoch_like_ms + last_offset_ms;
-    const uint64_t now_epoch_like_ms = start_epoch_like_ms + now_offset_ms;
+    
+    const uint64_t last_sample_offset_ms = static_cast<uint64_t>(dynamic_history_last_ms - dynamic_history_start_ms);
+    const uint64_t current_time_offset_ms = static_cast<uint64_t>(current_uptime - dynamic_history_start_ms);
+    
+    const uint64_t last_sample_calendar_ms = charge_start_calendar_ms + last_sample_offset_ms;
+    const uint64_t current_time_calendar_ms = charge_start_calendar_ms + current_time_offset_ms;
 
-    uint64_t next_boundary_epoch_like_ms = ((last_epoch_like_ms / boundary_period_ms) + 1ULL) * boundary_period_ms;
-    bool wrote_sample = false;
+    // Find the next 5-minute boundary following the last recorded sample
+    uint64_t next_boundary_calendar_ms = ((last_sample_calendar_ms / CALENDAR_ALIGNMENT_PERIOD_MS) + 1ULL) * CALENDAR_ALIGNMENT_PERIOD_MS;
+    bool wrote_at_least_one_sample = false;
 
+    // Helper to record a sample for a specific point in time
     auto write_segment_sample = [&](uint64_t end_offset_ms, float end_kwh) {
         const uint64_t segment_start_offset_ms = static_cast<uint64_t>(dynamic_history_last_ms - dynamic_history_start_ms);
-        const uint32_t segment_ms = static_cast<uint32_t>(end_offset_ms - segment_start_offset_ms);
-        if (segment_ms == 0 || end_kwh < dynamic_history_last_kwh) {
+        const uint32_t segment_duration_ms = static_cast<uint32_t>(end_offset_ms - segment_start_offset_ms);
+        
+        if (segment_duration_ms == 0 || end_kwh < dynamic_history_last_kwh) {
             return;
         }
 
-        const float delta_kwh = end_kwh - dynamic_history_last_kwh;
-        const float interval_hours = segment_ms / 3600000.0f;
-        const uint32_t power_w = interval_hours > 0.0f
-            ? static_cast<uint32_t>(std::round(delta_kwh / interval_hours * 1000.0f))
+        const float energy_delta_kwh = end_kwh - dynamic_history_last_kwh;
+        const float segment_duration_hours = segment_duration_ms / 3600000.0f;
+        const uint32_t average_power_w = segment_duration_hours > 0.0f
+            ? static_cast<uint32_t>(std::round(energy_delta_kwh / segment_duration_hours * 1000.0f))
             : 0;
 
         ChargeDynamicHistorySample sample;
+        // offset_minutes is the time since charge start, rounded to nearest full minute
         sample.offset_minutes = static_cast<uint16_t>(std::min<uint64_t>((end_offset_ms + 30000ULL) / 60000ULL, UINT16_MAX));
-        sample.power_w = static_cast<uint16_t>(std::min<uint32_t>(power_w, UINT16_MAX));
+        sample.power_w = static_cast<uint16_t>(std::min<uint32_t>(average_power_w, UINT16_MAX));
         sample.price_ct_per_kwh_milli = price_ct_per_kwh_milli;
+        
         writeDynamicHistorySample(dynamic_history_file_index, dynamic_history_record_index, sample);
 
+        // Advance baseline for the next segment
         dynamic_history_last_ms = dynamic_history_start_ms + static_cast<uint32_t>(end_offset_ms);
         dynamic_history_last_kwh = end_kwh;
-        wrote_sample = true;
+        wrote_at_least_one_sample = true;
     };
 
-    while (next_boundary_epoch_like_ms <= now_epoch_like_ms) {
-        const uint64_t end_offset_ms = next_boundary_epoch_like_ms - start_epoch_like_ms;
-        const float ratio = static_cast<float>(end_offset_ms - last_offset_ms) / static_cast<float>(now_offset_ms - last_offset_ms);
-        const float boundary_kwh = interval_start_kwh + (kwh_abs - interval_start_kwh) * std::max(0.0f, std::min(1.0f, ratio));
-        write_segment_sample(end_offset_ms, boundary_kwh);
-        next_boundary_epoch_like_ms += boundary_period_ms;
+    // Interpolate and record samples for every calendar boundary we crossed since the last sample
+    while (next_boundary_calendar_ms <= current_time_calendar_ms) {
+        const uint64_t boundary_offset_ms = next_boundary_calendar_ms - charge_start_calendar_ms;
+        
+        // Linear interpolation factor (0.0 to 1.0) of the boundary within the raw measurement interval
+        const float interpolation_ratio = static_cast<float>(boundary_offset_ms - last_sample_offset_ms) / 
+                                          static_cast<float>(current_time_offset_ms - last_sample_offset_ms);
+        
+        const float interpolated_boundary_kwh = interval_start_kwh + (kwh_abs - interval_start_kwh) * 
+                                                std::max(0.0f, std::min(1.0f, interpolation_ratio));
+        
+        write_segment_sample(boundary_offset_ms, interpolated_boundary_kwh);
+        next_boundary_calendar_ms += CALENDAR_ALIGNMENT_PERIOD_MS;
     }
 
+    // If forced (end of charge), record the current state as the final sample
     if (force) {
-        write_segment_sample(now_offset_ms, kwh_abs);
+        write_segment_sample(current_time_offset_ms, kwh_abs);
     }
 
-    if (!wrote_sample && !force) {
+    if (!wrote_at_least_one_sample && !force) {
         // No boundary crossed yet. Keep the existing sample anchor so the next
         // call can still span the whole interval to the first boundary.
         return;
@@ -854,32 +908,27 @@ void ChargeTracker::sampleDynamicHistory(float kwh_abs, int32_t price_ct_per_kwh
 
 }
 
-uint32_t ChargeTracker::finishDynamicCostTracking(float kwh_end)
+cent ChargeTracker::finishCostTracking(float kwh_end)
 {
 #if MODULE_DAY_AHEAD_PRICES_AVAILABLE()
-    if (!dynamic_cost_tracking) {
-        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    if (!is_dynamic_cost_tracking_active) {
+        return PRICE_UNAVAILABLE;
     }
 
     // Force one final integration step with the exact meter end value before
     // the charge is closed and current_charge is reset. Keep the interval price
     // for the final history sample because sampleDynamicCost advances
-    // dynamic_cost_last_price to the newly observed price after integrating.
-    const int32_t final_history_price = dynamic_cost_last_price;
+    // last_observed_price_milli_ct to the newly observed price after integrating.
     sampleDynamicCost(kwh_end);
-    sampleDynamicHistory(kwh_end, final_history_price, true);
-    dynamic_cost_tracking = false;
-    dynamic_cost_last_kwh = NAN;
-    dynamic_cost_last_price = INT32_MAX;
+    sampleDynamicHistory(kwh_end, last_observed_price_milli_ct, true);
+    is_dynamic_cost_tracking_active = false;
+    last_meter_reading_kwh = NAN;
+    last_observed_price_milli_ct = PRICE_UNAVAILABLE;
 
-    if (dynamic_cost_cent < 0.0) {
-        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
-    }
-
-    return static_cast<uint32_t>(std::round(dynamic_cost_cent));
+    return static_cast<cent>(std::round(accumulated_cost / 1000.0));
 #else
     (void)kwh_end;
-    return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    return CHARGE_per_charge_cost_UNAVAILABLE;
 #endif
 }
 
@@ -888,14 +937,14 @@ bool charged_invalid(ChargeStart cs, ChargeEnd ce)
     return isnan(cs.meter_start) || isnan(ce.meter_end) || ce.meter_end < cs.meter_start;
 }
 
-uint32_t ChargeTracker::getSupplementaryRecordCost(uint32_t file_index, uint32_t record_index)
+cent ChargeTracker::getStoredCost(uint32_t file_index, uint32_t record_index)
 {
     ChargeSupplementaryRecord supplementary_record;
     if (!getSupplementaryRecord(file_index, record_index, &supplementary_record)) {
-        return CHARGE_DYNAMIC_COST_UNAVAILABLE;
+        return PRICE_UNAVAILABLE;
     }
 
-    return supplementary_record.cost_cent;
+    return supplementary_record.cost;
 }
 
 bool ChargeTracker::getSupplementaryRecord(uint32_t file_index, uint32_t record_index, ChargeSupplementaryRecord *supplementary_record)
@@ -1007,7 +1056,7 @@ void ChargeTracker::writeSupplementaryRecord(uint32_t file_index, uint32_t recor
 
     logger.printfln("Schreibe eigentlichen Record an Position: %lu", record_index * sizeof(ChargeSupplementaryRecord));
     ChargeSupplementaryRecord supplementary_record;
-    supplementary_record.cost_cent = cost_cent;
+    supplementary_record.cost = cost_cent;
     supplementary_record.tag_type = tag_type;
     strlcpy(supplementary_record.tag_id, tag_id, sizeof(supplementary_record.tag_id));
     
@@ -1071,10 +1120,10 @@ bool ChargeTracker::upgradeSupplementaryRecordFile(uint32_t file_index)
     }
 
     supplementary_record_file.seek(0);
-    uint32_t legacy_cost_cent = CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    uint32_t legacy_cost_cent = PRICE_UNAVAILABLE;
     while (supplementary_record_file.read(reinterpret_cast<uint8_t *>(&legacy_cost_cent), sizeof(legacy_cost_cent)) == sizeof(legacy_cost_cent)) {
         ChargeSupplementaryRecord upgraded_record;
-        upgraded_record.cost_cent = legacy_cost_cent;
+        upgraded_record.cost = legacy_cost_cent;
         if (upgraded_file.write(reinterpret_cast<const uint8_t *>(&upgraded_record), sizeof(upgraded_record)) != sizeof(upgraded_record)) {
             upgraded_file.close();
             supplementary_record_file.close();
@@ -1139,7 +1188,7 @@ void ChargeTracker::readNRecords(File *f, size_t records_to_read)
         last_charge->get("charge_duration")->updateUint(ce.charge_duration);
         last_charge->get("user_id")->updateUint(cs.user_id);
         last_charge->get("energy_charged")->updateFloat(charged_invalid(cs, ce) ? NAN : ce.meter_end - cs.meter_start);
-        last_charge->get("dynamic_cost")->updateUint(getSupplementaryRecordCost(file_index, record_index));
+        last_charge->get("per_charge_cost")->updateInt(getStoredCost(file_index, record_index));
         ++record_index;
     }
 }
@@ -1318,7 +1367,7 @@ size_t get_display_name(uint8_t user_id, char *ret_buf, display_name_entry *disp
     return display_name_cache[user_id].length;
 }
 
-static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, Language language, uint32_t electricity_price, uint32_t dynamic_cost, display_name_entry *display_name_cache)
+static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, Language language, uint32_t electricity_price, uint32_t per_charge_cost, display_name_entry *display_name_cache)
 {
     buf += 1 + timestamp_min_to_date_time_string(buf, cs.timestamp_minutes, language);
 
@@ -1367,12 +1416,12 @@ static char *tracked_charge_to_string(char *buf, ChargeStart cs, ChargeEnd ce, L
         buf += 1 + written;
     }
 
-    if (dynamic_cost != CHARGE_DYNAMIC_COST_UNAVAILABLE) {
-        if (dynamic_cost > 999999) {
+    if (per_charge_cost != PRICE_UNAVAILABLE) {
+        if (per_charge_cost > 999999) {
             memcpy(buf, ">=10000", ARRAY_SIZE(">=10000"));
             buf += ARRAY_SIZE(">=10000");
         } else {
-            buf += 1 + sprintf_u(buf, "%ld%c%02ld", dynamic_cost / 100, (language == Language::English) ? '.' : ',', dynamic_cost % 100);
+            buf += 1 + sprintf_u(buf, "%ld%c%02ld", per_charge_cost / 100, (language == Language::English) ? '.' : ',', per_charge_cost % 100);
         }
     } else if (electricity_price == 0) {
         memcpy(buf, "---", ARRAY_SIZE("---"));
@@ -2485,9 +2534,9 @@ int ChargeTracker::generate_pdf(
                 else {
                     double charged = ce.meter_end - cs.meter_start;
                     charged_sum += charged;
-                    const uint32_t dynamic_cost = getSupplementaryRecordCost(i, j);
-                    if (dynamic_cost != CHARGE_DYNAMIC_COST_UNAVAILABLE) {
-                        charged_cost_sum += dynamic_cost;
+                    const cent per_charge_cost = getStoredCost(i, j);
+                    if (per_charge_cost != PRICE_UNAVAILABLE) {
+                        charged_cost_sum += per_charge_cost;
                         seen_charge_cost = true;
                     } else if (electricity_price != 0) {
                         charged_cost_sum += round(charged * electricity_price / 100.0f);
@@ -2639,7 +2688,7 @@ search_done:
                 if (!ChargeTracker::include_charge(cs, user_filter, start_timestamp_min, end_timestamp_min, configured_users))
                     continue;
 
-                table_lines_head = tracked_charge_to_string(table_lines_head, cs, ce, language, electricity_price, getSupplementaryRecordCost(current_file, current_charge), display_name_cache);
+                table_lines_head = tracked_charge_to_string(table_lines_head, cs, ce, language, electricity_price, getStoredCost(current_file, current_charge), display_name_cache);
                 ++lines_generated;
             }
             if (current_charge >= (CHARGE_RECORD_MAX_FILE_SIZE / CHARGE_RECORD_SIZE)) {

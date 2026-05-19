@@ -35,13 +35,12 @@
 // whole charge.
 #define CHARGE_DYNAMIC_HISTORY_INTERVAL_MS (5UL * 60UL * 1000UL)
 
-// Dynamic costs and metadata that would bloat or destabilize the original
-// 16-byte charge record are stored in a separate supplementary record file per
-// charge-record file.
-// This sentinel marks charges for which no dynamic-price calculation exists,
-// for example old records that were written before this feature was available.
-#define CHARGE_DYNAMIC_COST_UNAVAILABLE UINT32_MAX
-#define CHARGE_DYNAMIC_HISTORY_PRICE_UNAVAILABLE INT32_MAX
+namespace charge_tracker_defs
+{
+    using cent=int32_t;
+    using millicent=int32_t; // Der Preis in Millicent. Damit ist der maximale Preis etwa 43000€
+    inline constexpr millicent PRICE_UNAVAILABLE=INT32_MAX; // Define this for an unset value;
+}
 
 // Keep the NFC tag storage local to the supplementary record format. NFC tag
 // IDs are currently formatted as ten hex bytes with separators ("AA:..."),
@@ -85,7 +84,7 @@ struct [[gnu::packed]] Charge {
 // size-based migration; otherwise record_index based random access will silently
 // point at the wrong bytes for older files.
 struct [[gnu::packed]] ChargeSupplementaryRecord {
-    uint32_t cost_cent = CHARGE_DYNAMIC_COST_UNAVAILABLE;
+    charge_tracker_defs::cent cost = charge_tracker_defs::PRICE_UNAVAILABLE;
     uint8_t tag_type = 0;
     char tag_id[CHARGE_SUPPLEMENTARY_TAG_ID_BUFFER_LENGTH] = {};
 };
@@ -98,7 +97,7 @@ static_assert(sizeof(ChargeSupplementaryRecord) == 35, "Unexpected size of Charg
 struct [[gnu::packed]] ChargeDynamicHistorySample {
     uint16_t offset_minutes = 0;
     uint16_t power_w = 0;
-    int32_t price_ct_per_kwh_milli = CHARGE_DYNAMIC_HISTORY_PRICE_UNAVAILABLE;
+    charge_tracker_defs::millicent price_ct_per_kwh_milli = charge_tracker_defs::PRICE_UNAVAILABLE;
 };
 
 static_assert(sizeof(ChargeDynamicHistorySample) == 8, "Unexpected size of ChargeDynamicHistorySample");
