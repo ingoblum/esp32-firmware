@@ -31,7 +31,15 @@
 
 // Out-of-line destructor: unique_ptr_any<SpineConnection> needs complete SpineConnection type
 // for DeleterAny.
-ShipConnection::~ShipConnection() = default;
+ShipConnection::~ShipConnection()
+{
+    task_scheduler.cancel(timeout_task);
+    task_scheduler.cancel(hello_wait_for_ready_timer);
+    task_scheduler.cancel(hello_send_prolongation_request_timer);
+    task_scheduler.cancel(hello_send_prolongation_reply_timer);
+    task_scheduler.cancel(hello_trust_check_timer);
+    task_scheduler.cancel(protocol_handshake_timer);
+}
 
 extern EEBus eebus;
 
@@ -1191,6 +1199,14 @@ void ShipConnection::state_done()
             }
         });
     }
+    if (!connection_established) {
+        // SHIP 12.2.5: After entering the data exchange state (Done),
+        // send an accessMethodsRequest to the peer.
+        // This must happen on first entry before processing any data.
+        const char *request = "{\"accessMethodsRequest\":[]}";
+        send_string(request, strlen(request));
+    }
+
     connection_established = true;
 
     auto protocol_state = get_protocol_state();

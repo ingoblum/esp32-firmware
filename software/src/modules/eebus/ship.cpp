@@ -186,7 +186,6 @@ void Ship::enable_ship()
         autoconnect_timer = task_scheduler.scheduleOnce(
             [this]() {
                 discover_ship_peers();
-                connect_trusted_peers();
             },
             30_s); // Initial Timeout is 30s after that EEBUS_SHIP_AUTOCONNECT_INTERVAL should be used
     }
@@ -303,6 +302,7 @@ void Ship::setup_wss()
             return;
         }
 
+        eebus.trace_fmtln("onDisconnect_HTTPThread called for %s", ship_connection->peer_node->node_name().c_str());
         client->setCtx(nullptr);
         ship_connection->ws_client = nullptr; // Connection already closed, can't use it anymore.
         ship_connection->schedule_close(0_ms, "Websocket disconnected");
@@ -399,7 +399,6 @@ void Ship::connect_trusted_peers()
     autoconnect_timer= task_scheduler.scheduleOnce(
         [this]() {
             discover_ship_peers();
-            connect_trusted_peers();
         },
         EEBUS_SHIP_AUTOCONNECT_INTERVAL);
 #endif
@@ -594,6 +593,7 @@ void Ship::check_mdns_results()
     mdns_query_results_free(results);
     update_discovery_state(ShipDiscoveryState::ScanDone);
     eebus.update_peers_state();
+    connect_trusted_peers();
 }
 void Ship::update_discovery_state(ShipDiscoveryState new_state)
 {

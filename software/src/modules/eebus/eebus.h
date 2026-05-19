@@ -28,10 +28,10 @@
 // If the EVSE module is available we are probably a charger.
 #if MODULE_EVSE_COMMON_AVAILABLE()
 #define EEBUS_MODE_EVSE
-#define EEBUS_DEVICE_TYPE "ChargingStation" // The device type as defined in EEBUS SPINE TS ResourceSpecification. Can be freely defined i
+#define EEBUS_DEVICE_TYPE "ChargingStation" // The device type as defined in EEBUS SPINE TS ResourceSpecification. Can be freely defined
 #else
 #define EEBUS_MODE_EM
-#define EEBUS_DEVICE_TYPE "EnergyManagementSystem" // The device type as defined in EEBUS SPINE TS ResourceSpecification. Can be freely defined i
+#define EEBUS_DEVICE_TYPE "EnergyManagementSystem" // The device type as defined in EEBUS SPINE TS ResourceSpecification. Can be freely defined
 #endif
 
 //#define EEBUS_DEV_TEST_ENABLE // Enable to set the eebus system into test mode. This will update all enabled usecases with random data to see if the appropriate functions work properly and communication works.
@@ -82,8 +82,8 @@
 #define SUPPORTED_SPINE_VERSION "1.3.0" // The supported SPINE version for EEBus
 #define EEBUS_NO_VALUE INT32_MIN
 
-//#define EEBUS_SHIP_AUTOCONNECT // If defined, the EEBus device will automatically connect to discovered and trusted SHIP peers. This is currently in testing
-#define EEBUS_SHIP_AUTOCONNECT_INTERVAL 30_s //
+#define EEBUS_SHIP_AUTOCONNECT // If defined, the EEBus device will automatically connect to discovered and trusted SHIP peers. This is currently in testing
+#define EEBUS_SHIP_AUTOCONNECT_INTERVAL 300_s //
 
 // Forward declarations (so we don't have to include spine_types.h here)
 class EEBusUseCases;
