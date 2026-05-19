@@ -802,8 +802,14 @@ def write_generated_file(path, content):
 
     digest = hashlib.sha256(content.encode('utf-8')).hexdigest()
 
+    # On Windows we may access the repo through a SUBST drive (e.g. U:) while
+    # Python resolves __file__ to its physical path (e.g. C:). relpath() raises
+    # ValueError if the mounts differ, so normalize both sides to real paths.
+    path_for_index = os.path.realpath(path)
+    root_for_index = os.path.realpath(root_dir)
+
     with open(os.path.join(root_dir, 'generated_files_v2'), 'a', encoding='utf-8') as f:
-        f.write(f'{digest} {os.path.relpath(os.path.abspath(path), root_dir)}\n')
+        f.write(f'{digest} {os.path.relpath(path_for_index, root_for_index)}\n')
 
 def extract_shebang(path):
     with open(path, 'r', encoding='utf-8') as f:
