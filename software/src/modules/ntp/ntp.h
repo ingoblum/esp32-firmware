@@ -35,6 +35,8 @@ private:
     String ntp_server2;
 
     micros_t sync_expires_at = 0_us;
+    uint32_t first_sync_retry_generation = 0;
+    uint8_t first_sync_retry_count = 0;
 
 public:
     NTP(){}
@@ -49,5 +51,8 @@ public:
     void time_synced_NTPThread();
 
 private:
+    void configure_servers(uint8_t rotation_offset);
+    void start_sntp_if_possible();
+    void schedule_first_sync_retry(uint32_t generation);
     void apply_config();
 };
