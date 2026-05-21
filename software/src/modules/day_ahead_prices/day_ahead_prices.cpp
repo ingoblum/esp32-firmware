@@ -443,12 +443,18 @@ void DayAheadPrices::update()
     }
 
     if (state.get("next_check")->asUint() > rtc.timestamp_minutes()) {
+        logger.tracefln("Skip update: next_check=%u now=%u",
+                        state.get("next_check")->asUint(),
+                        rtc.timestamp_minutes());
         return;
     }
 
     // Only update if network is connected and clock is synced
     struct timeval tv_now;
     if (!network.is_connected() || !rtc.clock_synced(&tv_now)) {
+        logger.printfln("Skip update: network_connected=%d clock_synced=%d",
+                        network.is_connected(),
+                        rtc.clock_synced(&tv_now));
         retry_update(1_s);
         return;
     }
@@ -473,7 +479,12 @@ void DayAheadPrices::update()
     }
     json_buffer_position = 0;
 
-    https_client.download_async(get_api_url_with_path().c_str(), config.get("cert_id")->asInt(), [this](AsyncHTTPSClientEvent *event) {
+    const String request_url = get_api_url_with_path();
+    logger.printfln("Requesting prices from %s (cert_id=%li)",
+                    request_url.c_str(),
+                    config.get("cert_id")->asInt());
+
+    https_client.download_async(request_url.c_str(), config.get("cert_id")->asInt(), [this, request_url](AsyncHTTPSClientEvent *event) {
         switch (event->type) {
         case AsyncHTTPSClientEventType::Error:
             switch (event->error) {
@@ -526,7 +537,9 @@ void DayAheadPrices::update()
                             }
                         }
 
-                        logger.printfln("No prices available yet");
+                        logger.printfln("No prices available yet (source=%s, status=%d)",
+                                        request_url.c_str(),
+                                        event->error_http_status);
                         last_no_prices_available = now_us();
                         break;
                     }
