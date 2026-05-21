@@ -21,3 +21,6 @@ software/*_valovo_*
 cov-analysis-linux64-*
 software/build_*.sh
 software/signature/keys-*
+
+.pre-commit-config.yaml
+.gitleaks-*.json
