@@ -73,8 +73,8 @@ public:
     ConfigRoot remove;
     ConfigRoot http_auth;
     ConfigRoot http_auth_update;
-    ConfigRoot charge_start;
-    ConfigRoot charge_stop;
+    ConfigRoot start_charging_cmd;
+    ConfigRoot stop_charging_cmd;
 
     bool start_charging(uint8_t user_id, uint16_t current_limit, uint8_t auth_type, Config::ConfVariant auth_info);
     bool stop_charging(uint8_t user_id, bool force, float meter_abs = 0);

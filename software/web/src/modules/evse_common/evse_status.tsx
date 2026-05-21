@@ -130,7 +130,7 @@ export class EVSEStatus extends Component<{}, EVSEStatusState> {
             result.push(
                 <Dropdown.Item as="button"
                                className="py-2"
-                               onClick={() => {API.call("users/charge_start",
+                               onClick={() => {API.call("users/start_charging",
                                                         {user_id: u.id, username: u.username},
                                                         () => __("evse.script.start_charging_failed"));
                                                API.call("evse/start_charging", {}, () => __("evse.script.start_charging_failed"));}

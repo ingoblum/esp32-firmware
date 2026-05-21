@@ -319,14 +319,14 @@ void Users::pre_setup()
         return "Can't enable HTTP authentication if not at least one user with a password is configured!";
     }};
 
-    charge_start = ConfigRoot{Config::Object({
+    start_charging_cmd = ConfigRoot{Config::Object({
         // 256 is an out-of-range marker that lets us detect "missing user_id"
         // when callers choose username-only commands.
         {"user_id", Config::Uint(256, 0, 256)},
         {"username", Config::Str("", 0, USERNAME_LENGTH)}
     })};
 
-    charge_stop = ConfigRoot{Config::Object({
+    stop_charging_cmd = ConfigRoot{Config::Object({
         {"user_id", Config::Uint(256, 0, 256)},
         {"username", Config::Str("", 0, USERNAME_LENGTH)}
     })};
@@ -722,9 +722,9 @@ void Users::register_urls()
         API::writeConfig("users/config", &config);
     }, false);
 
-    api.addCommand("users/charge_start", &charge_start, {}, [this](Language /*language*/, String &errmsg) {
+    api.addCommand("users/start_charging", &start_charging_cmd, {}, [this](Language /*language*/, String &errmsg) {
         uint8_t user_id = 0;
-        if (!this->resolve_charge_action_user(charge_start, &user_id, errmsg)) {
+        if (!this->resolve_charge_action_user(start_charging_cmd, &user_id, errmsg)) {
             return;
         }
 
@@ -733,9 +733,9 @@ void Users::register_urls()
         }
     }, true);
 
-    api.addCommand("users/charge_stop", &charge_stop, {}, [this](Language /*language*/, String &errmsg) {
+    api.addCommand("users/stop_charging", &stop_charging_cmd, {}, [this](Language /*language*/, String &errmsg) {
         uint8_t user_id = 0;
-        if (!this->resolve_charge_action_user(charge_stop, &user_id, errmsg)) {
+        if (!this->resolve_charge_action_user(stop_charging_cmd, &user_id, errmsg)) {
             return;
         }
 

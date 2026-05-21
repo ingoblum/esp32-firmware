@@ -39,12 +39,12 @@ export interface http_auth {
     enabled: boolean;
 }
 
-export interface charge_start {
+export interface start_charging {
     user_id?: number;
     username?: string;
 }
 
-export interface charge_stop {
+export interface stop_charging {
     user_id?: number;
     username?: string;
 }
