@@ -859,6 +859,20 @@ export function put(url: string, payload: any, urgent: boolean, timeout_ms: numb
 
 export const async_modal_ref: RefObject<AsyncModal> = createRef();
 
+export async function async_confirm(text: string | ComponentChildren) {
+    if (!async_modal_ref.current) {
+        return window.confirm(typeof text === "string" ? text : "Confirm?");
+    }
+    return await async_modal_ref.current.show({
+        title: () => __("evse.status.start_charging"),
+        body: () => text,
+        no_variant: "secondary",
+        no_text: () => __("evse.content.abort"),
+        yes_variant: "primary",
+        yes_text: () => __("evse.status.start_charging"),
+    });
+}
+
 export function isInteger(x: number) {
     return !isNaN(x) && (x === (x | 0));
 }

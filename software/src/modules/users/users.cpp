@@ -418,6 +418,25 @@ void Users::setup()
         static uint8_t last_charger_state = outer_charger_state;
 
         uint8_t current_charger_state = get_charger_state();
+
+        // If an authorization is pending and the charger is now ready to charge or charging,
+        // finally start the charge tracker.
+        if (pending_auth.active && (current_charger_state == CHARGER_STATE_READY_TO_CHARGE || current_charger_state == CHARGER_STATE_CHARGING)) {
+            if (!charge_tracker.currentlyCharging()) {
+                uint32_t evse_uptime = evse_common.get_low_level_state().get("uptime")->asUint();
+                float meter_start = get_energy();
+                uint32_t timestamp = rtc.timestamp_minutes();
+
+                if (charge_tracker.startCharge(timestamp, meter_start, pending_auth.user_id, evse_uptime, pending_auth.auth_type, pending_auth.auth_info)) {
+                    write_user_slot_info(pending_auth.user_id, evse_uptime, timestamp, meter_start);
+                    pending_auth.active = false;
+                }
+            } else {
+                // Already charging (e.g. through other means or previously started), clear pending.
+                pending_auth.active = false;
+            }
+        }
+
         if (current_charger_state == last_charger_state)
             return;
 
@@ -865,8 +884,13 @@ bool Users::trigger_charge_action(uint8_t user_id, uint8_t auth_type, Config::Co
                     this->stop_charging(user_id, false);
                 return false;
             }
-            if ((action == TRIGGER_CHARGE_ANY || action == TRIGGER_CHARGE_START) && (auth_type == USERS_AUTH_TYPE_NFC_INJECTION || deadline_elapsed(last_charge_action_triggered + deadtime_post_stop)))
+            if ((action == TRIGGER_CHARGE_ANY || action == TRIGGER_CHARGE_START) && (auth_type == USERS_AUTH_TYPE_NFC_INJECTION || deadline_elapsed(last_charge_action_triggered + deadtime_post_stop))) {
+                // If a user (via NFC or API) wants to start charging, we also automatically release
+                // the manual charging slot (Concept 2). This prevents the case where the user is
+                // authorized but the charge is blocked by a previous manual stop.
+                api.callCommand("evse/start_charging");
                 return this->start_charging(user_id, current_limit, auth_type, auth_info);
+            }
             return false;
         case IEC_STATE_C: // State C: The user wants to stop charging.
             // Debounce here a bit, an impatient user can otherwise accidentially trigger a stop if a start_charging takes too long.
@@ -889,16 +913,20 @@ bool Users::start_charging(uint8_t user_id, uint16_t current_limit, uint8_t auth
 {
     last_charge_action_triggered = now_us();
 
+    // If we are already charging, we don't start a new charge.
     if (charge_tracker.currentlyCharging())
         return false;
 
-    uint32_t evse_uptime = evse_common.get_low_level_state().get("uptime")->asUint();
-    float meter_start = get_energy();
-    uint32_t timestamp = rtc.timestamp_minutes();
+    // Delayed tracker start. We only authorize the user here
+    // and set their current limit. The actual charge tracker start
+    // is performed in the periodic task once the EVSE reaches a state
+    // where it is actually ready to charge or charging.
+    pending_auth.user_id = user_id;
+    pending_auth.current_limit = current_limit;
+    pending_auth.auth_type = auth_type;
+    pending_auth.auth_info = auth_info;
+    pending_auth.active = true;
 
-    if (!charge_tracker.startCharge(timestamp, meter_start, user_id, evse_uptime, auth_type, auth_info))
-        return false;
-    write_user_slot_info(user_id, evse_uptime, timestamp, meter_start);
     evse_common.set_user_current(current_limit);
 
     return true;
@@ -907,6 +935,11 @@ bool Users::start_charging(uint8_t user_id, uint16_t current_limit, uint8_t auth
 bool Users::stop_charging(uint8_t user_id, bool force, float meter_abs)
 {
     last_charge_action_triggered = now_us();
+
+    // If a charge was pending but hasn't started yet, we can just clear it.
+    if (pending_auth.active && (force || pending_auth.user_id == user_id)) {
+        pending_auth.active = false;
+    }
 
     if (charge_tracker.currentlyCharging()) {
         UserSlotInfo info;
@@ -937,7 +970,11 @@ bool Users::stop_charging(uint8_t user_id, bool force, float meter_abs)
     }
 
     zero_user_slot_info();
-    evse_common.set_user_current(0);
+
+    // Only clear the user current if no other authorization is pending.
+    if (!pending_auth.active) {
+        evse_common.set_user_current(0);
+    }
 
     return true;
 }

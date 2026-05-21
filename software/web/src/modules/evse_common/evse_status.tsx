@@ -33,6 +33,8 @@ import { StatusSection } from "../../ts/components/status_section";
 import { useId } from "preact/hooks";
 import { ChargeModeButtons } from "modules/cm_networking/charge_mode_buttons";
 
+import * as day_ahead_prices from '../day_ahead_prices/main';
+
 interface EVSEStatusState {
     hidden: boolean;
     state: API.getType["evse/state"];
@@ -159,6 +161,16 @@ export class EVSEStatus extends Component<{}, EVSEStatusState> {
     }
 //#endif
 
+    async call_with_dap_check(callback: () => void) {
+        if (day_ahead_prices.is_day_ahead_prices_enabled() && API.get("day_ahead_prices/state").current_price == 0x7fffffff) {
+            if (await util.async_confirm(__("evse.status.dap_unavailable_warning"))) {
+                callback();
+            }
+        } else {
+            callback();
+        }
+    }
+
     render(props: {}, state: EVSEStatusState) {
         if (!util.render_allowed() || !API.hasFeature("evse") || state.hidden)
             return <StatusSection name="evse" />;
@@ -176,7 +188,17 @@ export class EVSEStatus extends Component<{}, EVSEStatusState> {
                 </Dropdown.Toggle>
                 <Dropdown.Menu renderOnMount align="end">
                     <Dropdown.Header class="text-wrap">{nfc_tag_list.length > 0 ? __("evse.status.start_charge_for_user") : __("evse.status.start_charge_no_tags")}</Dropdown.Header>
-                    {nfc_tag_list}
+                    {nfc_tag_list.map(item => {
+                        // The items are already Dropdown.Item components. We need to wrap their onClick.
+                        const originalOnClick = item.props.onClick;
+                        return {
+                            ...item,
+                            props: {
+                                ...item.props,
+                                onClick: () => this.call_with_dap_check(originalOnClick)
+                            }
+                        };
+                    })}
                 </Dropdown.Menu>
             </Dropdown>
 //#endif
@@ -184,7 +206,7 @@ export class EVSEStatus extends Component<{}, EVSEStatusState> {
         let evse_start_button = <Button
                 className="w-100"
                 disabled={!(state.state.iec61851_state == 1 && state.slots[4].max_current == 0)}
-                onClick={() =>  API.call('evse/start_charging', {}, () => __("evse.script.start_charging_failed"))}>
+                onClick={() => this.call_with_dap_check(() => API.call('evse/start_charging', {}, () => __("evse.script.start_charging_failed")))}>
                 {__("evse.status.start_charging")}
             </Button>
 

@@ -80,6 +80,15 @@ public:
     bool stop_charging(uint8_t user_id, bool force, float meter_abs = 0);
 
     micros_t last_charge_action_triggered = 0_us;
+
+private:
+    struct PendingAuthorization {
+        uint8_t user_id = 0;
+        uint16_t current_limit = 0;
+        uint8_t auth_type = 0;
+        Config::ConfVariant auth_info;
+        bool active = false;
+    } pending_auth;
 };
 
 void set_led(int16_t mode);

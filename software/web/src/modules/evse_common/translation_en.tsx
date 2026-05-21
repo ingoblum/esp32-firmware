@@ -18,6 +18,7 @@ let x = {
             "charge_control": "Charge control",
             "start_charging": "Start",
             "stop_charging": "Stop",
+            "dap_unavailable_warning": "Dynamic electricity price data is currently unavailable. Charging might occur at unexpected conditions. Do you want to start anyway?",
             "start_charge_for_user": "For user",
             "start_charge_no_tags": "No user with NFC tag configured",
             "mode": "Charge mode"

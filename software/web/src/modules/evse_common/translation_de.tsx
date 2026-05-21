@@ -18,6 +18,7 @@ let x = {
             "charge_control": "Ladesteuerung",
             "start_charging": "Start",
             "stop_charging": "Stop",
+            "dap_unavailable_warning": "Für die dynamischen Strompreise liegen aktuell keine Daten vor. Der Ladevorgang könnte zu unerwarteten Konditionen erfolgen. Möchten Sie trotzdem starten?",
             "start_charge_for_user": "Für Benutzer",
             "start_charge_no_tags": "Kein Benutzer mit NFC-Tag vorhanden",
             "mode": "Lademodus"
