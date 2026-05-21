@@ -1231,6 +1231,13 @@ public:
     void set_permit_null_updates(bool permit_null_updates);
     bool get_permit_null_updates();
 
+    // By default, ConfigRoot requires all keys defined in its schema to be present
+    // in the JSON payload (force_same_keys = true). If set to false, partial
+    // updates are allowed, which is useful for MQTT commands where only
+    // a subset of arguments might be provided.
+    void set_force_same_keys(bool force_same_keys);
+    bool get_force_same_keys();
+
     void update_from_copy(Config *copy);
 
     String update_from_file(File &&file);

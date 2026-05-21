@@ -103,7 +103,7 @@ String ConfigRoot::get_updated_copy(char *payload, size_t payload_len, Config *o
         return get_updated_copy_error(error, payload_len);
     }
 
-    return this->get_updated_copy(doc.as<JsonVariant>(), true, out_config, source, config_path, config_path_len);
+    return this->get_updated_copy(doc.as<JsonVariant>(), this->get_force_same_keys(), out_config, source, config_path, config_path_len);
 }
 
 String ConfigRoot::update_from_json(JsonVariant root, bool force_same_keys, ConfigSource source, const Config::Key *config_path, size_t config_path_len)
@@ -145,7 +145,7 @@ String ConfigRoot::get_updated_copy(T visitor, Config *out_config, ConfigSource 
     if (!err.isEmpty())
         return err;
 
-    auto *validator_ = reinterpret_cast<ConfigRoot::Validator *>(reinterpret_cast<uintptr_t>(this->validator) & (~0x01u));
+    auto *validator_ = reinterpret_cast<ConfigRoot::Validator *>(reinterpret_cast<uintptr_t>(this->validator) & (~0x03u));
 
     if (validator_ != nullptr) {
         err = (*validator_)(*out_config, source);
@@ -177,7 +177,7 @@ String ConfigRoot::update(const Config::ConfUpdate *val)
 String ConfigRoot::validate(ConfigSource source)
 {
     ASSERT_MAIN_THREAD();
-    auto *validator_ = reinterpret_cast<ConfigRoot::Validator *>(reinterpret_cast<uintptr_t>(this->validator) & (~0x01u));
+    auto *validator_ = reinterpret_cast<ConfigRoot::Validator *>(reinterpret_cast<uintptr_t>(this->validator) & (~0x03u));
 
     if (validator_ != nullptr) {
         return (*validator_)(*this, source);
@@ -203,6 +203,21 @@ void ConfigRoot::set_permit_null_updates(bool permit_null_updates) {
 bool ConfigRoot::get_permit_null_updates() {
     // Inverted; see set_permit_null_updates.
     return (reinterpret_cast<uintptr_t>(this->validator) & 0x01) == 0;
+}
+
+void ConfigRoot::set_force_same_keys(bool force_same_keys) {
+    // Store force_same_keys == true as 0 and == false as 1
+    // so that the default value is true.
+    // We use the second lowest bit of the validator pointer to store this flag.
+    if (force_same_keys)
+        this->validator = reinterpret_cast<ConfigRoot::Validator *>(reinterpret_cast<uintptr_t>(this->validator) & (~0x02u));
+    else
+        this->validator = reinterpret_cast<ConfigRoot::Validator *>(reinterpret_cast<uintptr_t>(this->validator) | 0x02u);
+}
+
+bool ConfigRoot::get_force_same_keys() {
+    // Inverted; see set_force_same_keys.
+    return (reinterpret_cast<uintptr_t>(this->validator) & 0x02) == 0;
 }
 
 #ifdef DEBUG_FS_ENABLE

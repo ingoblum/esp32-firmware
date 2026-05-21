@@ -320,16 +320,22 @@ void Users::pre_setup()
     }};
 
     start_charging_cmd = ConfigRoot{Config::Object({
-        // 256 is an out-of-range marker that lets us detect "missing user_id"
+        // 256 is an out-of-range marker that lets us detect "missing id"
         // when callers choose username-only commands.
-        {"user_id", Config::Uint(256, 0, 256)},
+        {"id", Config::Uint(256, 0, 256)},
         {"username", Config::Str("", 0, USERNAME_LENGTH)}
     })};
 
     stop_charging_cmd = ConfigRoot{Config::Object({
-        {"user_id", Config::Uint(256, 0, 256)},
+        {"id", Config::Uint(256, 0, 256)},
         {"username", Config::Str("", 0, USERNAME_LENGTH)}
     })};
+
+    // By default, the config system (via force_same_keys = true) requires all keys 
+    // of an object to be present in the JSON payload. For charging commands via MQTT/API, 
+    // we want to allow partial updates (e.g. only id or only username, or even empty {}).
+    start_charging_cmd.set_force_same_keys(false);
+    stop_charging_cmd.set_force_same_keys(false);
 }
 
 void create_username_file()
@@ -554,18 +560,37 @@ bool Users::is_user_configured(uint8_t user_id)
 
 bool Users::resolve_charge_action_user(ConfigRoot &command, uint8_t *resolved_user_id, String &errmsg)
 {
-    const uint32_t user_id_cfg = command.get("user_id")->asUint();
+    const uint32_t user_id_cfg = command.get("id")->asUint();
     const String &username = command.get("username")->asString();
     const bool have_user_id = user_id_cfg < 256;
     const bool have_username = !username.isEmpty();
 
     if (!have_user_id && !have_username) {
-        errmsg = "Either user_id or username must be provided.";
+        *resolved_user_id = 0;
+        return true;
+    }
+
+    if (have_user_id && have_username) {
+        for (size_t i = 0; i < config.get("users")->count(); ++i) {
+            Config *user_cfg = (Config *)config.get("users")->get(i);
+            if (user_cfg->get("id")->asUint() == user_id_cfg) {
+                if (user_cfg->get("username")->asString() == username) {
+                    *resolved_user_id = static_cast<uint8_t>(user_id_cfg);
+                    return true;
+                }
+
+                errmsg = "Provided id and username do not belong to the same user.";
+                return false;
+            }
+        }
+
+        errmsg = "User with id " + String(static_cast<unsigned long>(user_id_cfg)) + " not found.";
         return false;
     }
 
     if (have_user_id) {
         *resolved_user_id = static_cast<uint8_t>(user_id_cfg);
+        return true;
     }
 
     if (have_username) {
@@ -580,7 +605,7 @@ bool Users::resolve_charge_action_user(ConfigRoot &command, uint8_t *resolved_us
         return false;
     }
 
-    return true;
+    return false;
 }
 
 #if MODULE_EVSE_LED_AVAILABLE()
@@ -725,21 +750,31 @@ void Users::register_urls()
     api.addCommand("users/start_charging", &start_charging_cmd, {}, [this](Language /*language*/, String &errmsg) {
         uint8_t user_id = 0;
         if (!this->resolve_charge_action_user(start_charging_cmd, &user_id, errmsg)) {
+            start_charging_cmd.get("id")->updateUint(256);
+            start_charging_cmd.get("username")->updateString("");
             return;
         }
 
         if (!this->trigger_charge_action(user_id, USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_START, 0_s, 0_s)) {
             errmsg = "Failed to start charge for user. Please check EVSE state.";
         }
+
+        start_charging_cmd.get("id")->updateUint(256);
+        start_charging_cmd.get("username")->updateString("");
     }, true);
 
     api.addCommand("users/stop_charging", &stop_charging_cmd, {}, [this](Language /*language*/, String &errmsg) {
         uint8_t user_id = 0;
         if (!this->resolve_charge_action_user(stop_charging_cmd, &user_id, errmsg)) {
+            stop_charging_cmd.get("id")->updateUint(256);
+            stop_charging_cmd.get("username")->updateString("");
             return;
         }
 
         this->trigger_charge_action(user_id, USERS_AUTH_TYPE_NONE, Config::ConfVariant{}, TRIGGER_CHARGE_STOP, 0_s, 0_s);
+
+        stop_charging_cmd.get("id")->updateUint(256);
+        stop_charging_cmd.get("username")->updateString("");
     }, true);
 
     server.on_HTTPThread("/users/all_usernames", HTTP_GET, [this](WebServerRequest request) {
