@@ -40,7 +40,7 @@ static void set_sntp_server_slot(uint8_t slot, const String &server)
     // Passing nullptr explicitly clears a previously configured slot. This is
     // important when switching between DHCP/manual modes at runtime so stale
     // server entries from the prior mode are not kept unintentionally.
-    logger.printfln("NTP: configure server slot %u -> %s", slot, server.isEmpty() ? "<cleared>" : server.c_str());
+    logger.printfln("configure server slot %u -> %s", slot, server.isEmpty() ? "<cleared>" : server.c_str());
     esp_sntp_setservername(slot, server.isEmpty() ? nullptr : server.c_str());
 }
 
@@ -92,7 +92,7 @@ void NTP::setup()
     // It should be safe to set SNTP options without the network stack
     // running, but it needs to be running to send any SNTP queries anyway.
     esp_netif_init();
-    logger.printfln("NTP: setup completed, applying config.");
+    logger.printfln("setup completed, applying config.");
 
     apply_config();
 }
@@ -101,13 +101,13 @@ void NTP::register_events()
 {
 #if MODULE_NETWORK_AVAILABLE()
     network.on_network_connected([this](const Config *connected) {
-        logger.printfln("NTP: network connected event: connected=%d enable=%d sntp_enabled=%d",
+        logger.printfln("network connected event: connected=%d enable=%d sntp_enabled=%d",
                         connected->asBool(),
                         config.get("enable")->asBool(),
                         esp_sntp_enabled());
 
         if (!connected->asBool()) {
-            logger.printfln("NTP: network disconnected, stopping SNTP and resetting to config default server order.");
+            logger.printfln("network disconnected, stopping SNTP and resetting to config default server order.");
 
             if (esp_sntp_enabled()) {
                 esp_sntp_stop();
@@ -122,7 +122,7 @@ void NTP::register_events()
             configure_servers(0);
         }
         else if (config.get("enable")->asBool() && !esp_sntp_enabled()) {
-            logger.printfln("NTP: starting SNTP from network event.");
+            logger.printfln("starting SNTP from network event.");
             esp_sntp_init();
             first_sync_retry_count = 0;
             schedule_first_sync_retry(first_sync_retry_generation);
@@ -162,14 +162,14 @@ void NTP::start_sntp_if_possible()
 {
 #if MODULE_NETWORK_AVAILABLE()
     if (network.is_connected()) {
-        logger.printfln("NTP: network already connected, starting SNTP immediately.");
+        logger.printfln("network already connected, starting SNTP immediately.");
         esp_sntp_init();
     } else {
-        logger.printfln("NTP: network not connected yet, waiting for connected event before SNTP init.");
+        logger.printfln("network not connected yet, waiting for connected event before SNTP init.");
         return;
     }
 #else
-    logger.printfln("NTP: no network module, starting SNTP immediately.");
+    logger.printfln("no network module, starting SNTP immediately.");
     esp_sntp_init();
 #endif
 
@@ -190,7 +190,7 @@ void NTP::schedule_first_sync_retry(uint32_t generation)
 
 #if MODULE_NETWORK_AVAILABLE()
         if (!network.is_connected()) {
-            logger.printfln("NTP: first-sync retry postponed, network still disconnected.");
+            logger.printfln("first-sync retry postponed, network still disconnected.");
             schedule_first_sync_retry(generation);
             return;
         }
@@ -200,7 +200,7 @@ void NTP::schedule_first_sync_retry(uint32_t generation)
 
         const uint8_t rotation = first_sync_retry_count % 3;
 
-        logger.printfln("NTP: first-sync retry #%u (rotation=%u), restarting SNTP.",
+        logger.printfln("first-sync retry #%u (rotation=%u), restarting SNTP.",
                         first_sync_retry_count,
                         rotation);
 
@@ -217,7 +217,7 @@ void NTP::schedule_first_sync_retry(uint32_t generation)
 
 void NTP::apply_config()
 {
-    logger.printfln("NTP: apply_config begin: enable=%d use_dhcp=%d",
+    logger.printfln("apply_config begin: enable=%d use_dhcp=%d",
                     config.get("enable")->asBool(),
                     config.get("use_dhcp")->asBool());
 
@@ -225,21 +225,21 @@ void NTP::apply_config()
     const char *tz_string = lookup_timezone(tz_name);
 
     if (tz_string == nullptr) {
-        logger.printfln("NTP: failed to look up timezone information for %s. Will not set timezone", tz_name);
+        logger.printfln("failed to look up timezone information for %s. Will not set timezone", tz_name);
         return;
     }
 
     setenv("TZ", tz_string, 1);
     tzset();
-    logger.printfln("NTP: set timezone to %s", tz_name);
+    logger.printfln("set timezone to %s", tz_name);
 
     if (esp_sntp_enabled()) {
-        logger.printfln("NTP: SNTP currently enabled, stopping before reconfigure.");
+        logger.printfln("SNTP currently enabled, stopping before reconfigure.");
         esp_sntp_stop();
     }
 
     if (!config.get("enable")->asBool()) {
-        logger.printfln("NTP: disabled in config, SNTP will not be started.");
+        logger.printfln("disabled in config, SNTP will not be started.");
         set_synced(false);
         sync_expires_at = 0_us;
         return;
@@ -248,7 +248,7 @@ void NTP::apply_config()
     // Keep local copies of unsafe ConfStrings because the SNTP lib doesn't create its own copies and holds references to whatever is passed to it.
     ntp_server1 = config.get("server" )->asString();
     ntp_server2 = config.get("server2")->asString();
-    logger.printfln("NTP: configured manual servers: server1='%s' server2='%s'",
+    logger.printfln("configured manual servers: server1='%s' server2='%s'",
                     ntp_server1.c_str(),
                     ntp_server2.c_str());
 
@@ -277,7 +277,7 @@ void NTP::apply_config()
     configure_servers(0);
 
     if (ntp_server1.isEmpty() && ntp_server2.isEmpty()) {
-        logger.printfln("NTP: no manual NTP servers configured; relying on DHCP-provided servers only.");
+        logger.printfln("no manual NTP servers configured; relying on DHCP-provided servers only.");
     }
 
     first_sync_retry_count = 0;
@@ -315,7 +315,7 @@ void NTP::time_synced_NTPThread() {
             uint32_t secs = now_u32 / 1000;
             uint32_t ms   = now_u32 % 1000;
             // Don't log in TCP/IP task: Deadlocks the event lock
-            logger.printfln("NTP: synchronized at %lu,%03lu", secs, ms);
+            logger.printfln("synchronized at %lu,%03lu", secs, ms);
         });
 
         task_scheduler.scheduleUncancelable([this]() {
@@ -331,6 +331,6 @@ void NTP::time_synced_NTPThread() {
 
     sync_expires_at = now + 25_h;
     task_scheduler.scheduleOnce([this]() {
-        logger.printfln("NTP: sync callback processed, next sync expiry watchdog at +25h.");
+        logger.printfln("sync callback processed, next sync expiry watchdog at +25h.");
     });
 }
