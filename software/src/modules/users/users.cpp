@@ -453,6 +453,16 @@ void Users::setup()
             case CHARGER_STATE_WAITING_FOR_RELEASE:
                 break;
             case CHARGER_STATE_READY_TO_CHARGE:
+                // Automatic end when changing from 3 -> 2. When the tracker is not ende here it will
+                // fill with 0W-values indefinitely.
+                if (last_charger_state == CHARGER_STATE_CHARGING) {
+                    this->stop_charging(0, true);
+                }
+                // TODO: Revise the logic here. It might be the case, that the car only pauses the
+                // charge. If so, the history gets fragmented. In order to avoid this scenario, one could
+                // 1. implement a timout, e.g. 5 minutes before the tracker is stopped after the car ended or paused the charge.
+                // 2. stop the tracker based on a power threshold for a certain time.
+                [[fallthrough]];
             case CHARGER_STATE_CHARGING:
                 if (!get_user_slot()->get("active")->asBool())
                     this->start_charging(0, 32000, USERS_AUTH_TYPE_NONE, Config::ConfVariant{});
