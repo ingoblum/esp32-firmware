@@ -51,6 +51,16 @@ static const char * const resolution_str[] {
     "15min", "60min"
 };
 
+// Formatter, der nur zur Ausgabe des Logs benutzt wird.
+static void format_localtime_minute(uint32_t timestamp_minutes, char *buf, size_t buf_len)
+{
+    const time_t timestamp = static_cast<time_t>(timestamp_minutes) * 60;
+    struct tm timeinfo;
+
+    localtime_r(&timestamp, &timeinfo);
+    strftime(buf, buf_len, "%F %T", &timeinfo);
+}
+
 void DayAheadPrices::pre_setup()
 {
     config = ConfigRoot{Config::Object({
@@ -442,12 +452,25 @@ void DayAheadPrices::update()
         return;
     }
 
-    if (state.get("next_check")->asUint() > rtc.timestamp_minutes()) {
-        logger.printfln("Skip update: next_check=%lu now=%lu",
-                        state.get("next_check")->asUint(),
-                        rtc.timestamp_minutes());
+    const uint32_t next_check = state.get("next_check")->asUint();
+    const uint32_t now_minutes = rtc.timestamp_minutes();
+    if (next_check > now_minutes) {
+        if (last_skip_update_next_check != next_check) {
+            char next_check_str[20];
+            char now_str[20];
+
+            format_localtime_minute(next_check, next_check_str, ARRAY_SIZE(next_check_str));
+            format_localtime_minute(now_minutes, now_str, ARRAY_SIZE(now_str));
+
+            logger.printfln("Skip update: next_check=%s now=%s",
+                            next_check_str,
+                            now_str);
+            last_skip_update_next_check = next_check;
+        }
         return;
     }
+
+    last_skip_update_next_check = 0;
 
     // Only update if network is connected and clock is synced
     struct timeval tv_now;
