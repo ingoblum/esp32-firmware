@@ -18,6 +18,7 @@
  */
 #include "users.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <LittleFS.h>
@@ -116,6 +117,15 @@ bool read_user_slot_info(UserSlotInfo *result)
 {
     uint8_t buf[63] = {0};
     get_data_storage(buf);
+
+    // zero_user_slot_info() explicitly clears the EVSE storage page to all zeros.
+    // This is the normal "no persisted charge session" state after boot/stop.
+    if (std::all_of(buf, buf + sizeof(buf), [](uint8_t byte) { return byte == 0; })) {
+        // An empty slot means there is no user/session metadata to restore,
+        // not that the stored data is corrupted.
+        logger.printfln("User slot info empty (all zeros). No active user slot data to restore.");
+        return false;
+    }
 
     memcpy(result, buf, sizeof(UserSlotInfo));
     uint16_t calc = calc_checksum(*result);
