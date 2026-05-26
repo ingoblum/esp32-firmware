@@ -118,8 +118,16 @@ bool read_user_slot_info(UserSlotInfo *result)
     get_data_storage(buf);
 
     memcpy(result, buf, sizeof(UserSlotInfo));
-    if (calc_checksum(*result) != 0) {
-        logger.printfln("Checksum mismatch!");
+    uint16_t calc = calc_checksum(*result);
+    if (calc != 0) {
+        logger.printfln("Checksum mismatch! Calculated sum error: 0x%04X. Stored data: CS=0x%04X, V=%u, UID=%u, Uptime=%lu, TS=%lu, Meter=%f",
+            static_cast<unsigned int>(calc),
+            static_cast<unsigned int>(result->checksum),
+            static_cast<unsigned int>(result->version),
+            static_cast<unsigned int>(result->user_id),
+            result->evse_uptime_on_start,
+            result->timestamp_minutes,
+            result->meter_start);
         return false;
     }
 

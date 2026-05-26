@@ -59,9 +59,9 @@ String ConfigRoot::update_from_cstr(char *payload, size_t payload_len, const Con
 
 // Don't inline; keeps the buffer off the stack when there isn't any error.
 [[gnu::noinline]]
-static String get_updated_copy_error(DeserializationError error, size_t payload_len)
+static String get_updated_copy_error(DeserializationError error, const char *payload, size_t payload_len)
 {
-    char buf[160];
+    char buf[256];
     StringWriter sw(buf, sizeof(buf));
 
     sw.puts("Failed to deserialize: ");
@@ -91,6 +91,15 @@ static String get_updated_copy_error(DeserializationError error, size_t payload_
 
     sw.printf(" Payload length was %zu.", payload_len);
 
+    if (payload != nullptr && payload_len > 0) {
+        sw.puts(" Payload: ");
+        size_t print_len = std::min(payload_len, static_cast<size_t>(128));
+        sw.puts(payload, print_len);
+        if (payload_len > 128) {
+            sw.puts("...");
+        }
+    }
+
     return String(buf, sw.getLength());
 }
 
@@ -100,7 +109,7 @@ String ConfigRoot::get_updated_copy(char *payload, size_t payload_len, Config *o
     DeserializationError error = deserializeJson(doc, payload, payload_len);
 
     if (error.code() != DeserializationError::Ok) {
-        return get_updated_copy_error(error, payload_len);
+        return get_updated_copy_error(error, payload, payload_len);
     }
 
     return this->get_updated_copy(doc.as<JsonVariant>(), this->get_force_same_keys(), out_config, source, config_path, config_path_len);

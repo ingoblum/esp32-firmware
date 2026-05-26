@@ -443,7 +443,7 @@ void DayAheadPrices::update()
     }
 
     if (state.get("next_check")->asUint() > rtc.timestamp_minutes()) {
-        logger.tracefln("Skip update: next_check=%u now=%u",
+        logger.printfln("Skip update: next_check=%lu now=%lu",
                         state.get("next_check")->asUint(),
                         rtc.timestamp_minutes());
         return;
