@@ -84,6 +84,11 @@ uint16_t calc_checksum(const UserSlotInfo &info)
     uint32_t checksum = info.checksum
                       + ((((uint32_t)info.version) << 8) | info.user_id)
                       + (info.evse_uptime_on_start >> 16)
+                      // TODO: Change low-word masks from 0xFF to 0xFFFF to include all 16 low bits
+                      // in the checksum sum. The current 8-bit mask weakens corruption detection.
+                      // unfortunately this change will alter the checksum for already written entries,
+                      // which requires either a new version for the UserSlotInfo or some other means
+                      // of doing an upgrade without invalidating old data.
                       + (info.evse_uptime_on_start & 0xFF)
                       + (info.timestamp_minutes >> 16)
                       + (info.timestamp_minutes & 0xFF)
