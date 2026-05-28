@@ -470,27 +470,34 @@ void Users::setup()
         // if a start/stop was already tracked, so it is safe
         // to call those methods more often than needed.
         switch(current_charger_state) {
-            case CHARGER_STATE_NOT_PLUGGED_IN:
+            case CHARGER_STATE_NOT_PLUGGED_IN: // 0
                 this->stop_charging(0, true);
                 break;
-            case CHARGER_STATE_WAITING_FOR_RELEASE:
-                break;
-            case CHARGER_STATE_READY_TO_CHARGE:
+            case CHARGER_STATE_WAITING_FOR_RELEASE: // 1
+                // When stopping with evse/stop_charging, we did encounter a state transition from 3 -> 1.
+                // If so, we stop the charge here.
+                if (last_charger_state == CHARGER_STATE_CHARGING)
+                    this->stop_charging(0, true);
+
+                break; // Do not fall through here. The charge should stop and not start right away after.
+            case CHARGER_STATE_READY_TO_CHARGE: // 2
                 // Automatic end when changing from 3 -> 2. When the tracker is not ende here it will
                 // fill with 0W-values indefinitely.
-                if (last_charger_state == CHARGER_STATE_CHARGING) {
+                if (last_charger_state == CHARGER_STATE_CHARGING)
                     this->stop_charging(0, true);
-                }
+
                 // TODO: Revise the logic here. It might be the case, that the car only pauses the
                 // charge. If so, the history gets fragmented. In order to avoid this scenario, one could
                 // 1. implement a timout, e.g. 5 minutes before the tracker is stopped after the car ended or paused the charge.
                 // 2. stop the tracker based on a power threshold for a certain time.
+
+                // If the changes from 1 -> 2, we should start the charging here, and so we fall through here.
                 [[fallthrough]];
-            case CHARGER_STATE_CHARGING:
+            case CHARGER_STATE_CHARGING: // 3
                 if (!get_user_slot()->get("active")->asBool())
                     this->start_charging(0, 32000, USERS_AUTH_TYPE_NONE, Config::ConfVariant{});
                 break;
-            case CHARGER_STATE_ERROR:
+            case CHARGER_STATE_ERROR: // 4
                 break;
         }
     }, 1_s, 1_s);
