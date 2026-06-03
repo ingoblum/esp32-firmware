@@ -24,7 +24,7 @@ Custom changes so far compared to upstream/master
   add the ability to start a charge by user name/id.
 - NFC usability improvements:
   add names to the saved NFC tags to be able to distinguish them in the UI.
-- NTP and time-sync robustness improvements:
+- Workaround when the initial NTP sync hangs:
   NTP server rotation was added to speed up an initial time sync. In the original firmware,
   time synchronization hung when the NTP server with the highest priority
   had connectivity problems. This was problematic especially when using dynamic prices.
